@@ -12,7 +12,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className="min-h-screen antialiased">
-        <header className="border-b" style={{ borderColor: "var(--border)" }}>
+        <header className="border-b bg-white" style={{ borderColor: "var(--border)" }}>
           <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3">
             <Link href="/" className="flex items-center gap-2">
               <span className="text-lg">🩺</span>

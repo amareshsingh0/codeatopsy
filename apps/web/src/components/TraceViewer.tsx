@@ -287,7 +287,7 @@ export function TraceViewer({
                 background: k <= idx ? KIND_COLOR[e.kind] ?? "var(--muted)" : "var(--border)",
                 outline:
                   k === idx
-                    ? "2px solid #fff"
+                    ? "2px solid var(--text)"
                     : divergence && e.seq === divergence.studentSeq
                       ? "2px solid var(--danger)"
                       : "none",

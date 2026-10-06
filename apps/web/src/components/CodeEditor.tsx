@@ -5,7 +5,6 @@ import { cpp } from "@codemirror/lang-cpp";
 import { python } from "@codemirror/lang-python";
 import { javascript } from "@codemirror/lang-javascript";
 import { java } from "@codemirror/lang-java";
-import { oneDark } from "@codemirror/theme-one-dark";
 import { StateEffect, StateField, type Range } from "@codemirror/state";
 import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
 import type { Language } from "@codeautopsy/schemas";
@@ -90,7 +89,7 @@ export function CodeEditor({
     <CodeMirror
       value={value}
       height={height}
-      theme={oneDark}
+      theme="light"
       extensions={extensions}
       editable={!readOnly}
       onChange={onChange}
