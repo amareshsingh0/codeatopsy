@@ -31,3 +31,6 @@ Thumbs.db
 
 # zcode session files
 .zcode/
+
+.vercel
+.env*
