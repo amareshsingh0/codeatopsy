@@ -174,6 +174,7 @@ export function Workspace({ problem }: { problem: ClientProblem }) {
             </div>
             <ClientCodeEditor
               value={source}
+              onChange={setSource}
               markerLine={viewerData?.divergence?.studentLine ?? null}
               markerClass="cm-divergence-line"
               height="260px"

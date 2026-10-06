@@ -41,6 +41,7 @@ const highlightField = StateField.define<DecorationSet>({
 
 export function CodeEditor({
   value,
+  onChange,
   currentLine = null,
   markerLine = null,
   markerClass = "cm-divergence-line",
@@ -48,6 +49,7 @@ export function CodeEditor({
   readOnly = true,
 }: {
   value: string;
+  onChange?: (value: string) => void;
   currentLine?: number | null;
   markerLine?: number | null;
   markerClass?: string;
@@ -70,6 +72,7 @@ export function CodeEditor({
       theme={oneDark}
       extensions={extensions}
       editable={!readOnly}
+      onChange={onChange}
       onCreateEditor={(view) => {
         viewRef.current = view;
         view.dispatch({ effects: setHighlights.of({ currentLine, markerLine, markerClass }) });

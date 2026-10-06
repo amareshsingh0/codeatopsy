@@ -120,7 +120,7 @@ export function Playground() {
                 {phase === "running" ? "Running…" : "▶ Trace it"}
               </button>
             </div>
-            <ClientCodeEditor value={source} height="380px" readOnly={false} />
+            <ClientCodeEditor value={source} onChange={setSource} height="380px" readOnly={false} />
           </div>
 
           {phase === "running" && (
