@@ -1,0 +1,19 @@
+{
+  "slug": "binary-search",
+  "title": "Binary Search (inclusive interval)",
+  "difficulty": "easy",
+  "blurb": "Classic binary search over a sorted array. The demo submission looks correct — but skips the last candidate.",
+  "topics": ["binary search", "off-by-one", "loops"],
+  "timeLimitMs": 3000,
+  "memoryLimitMb": 256,
+  "bugHint": "The loop guard uses an exclusive-style bound (left < right) for an inclusive interval [left, right], so the final candidate — including the case left == right — is never inspected.",
+  "statement": "You are given a sorted array of `n` integers (ascending, may contain duplicates) and a `target`.\n\nPrint the **index** of `target` in the array, or `-1` if it is not present.\n\n**Input**\n```text\nn\na_1 a_2 ... a_n\ntarget\n```\n\n**Output**\n```text\nindex\n```\n\n**Constraints**\n- 1 <= n <= 2 * 10^5\n- -10^9 <= a_i, target <= 10^9",
+  "tests": [
+    { "id": "t1", "input": "7\n2 4 7 9 11 15 18\n18\n", "expectedOutput": "6\n", "hidden": false },
+    { "id": "t2", "input": "7\n2 4 7 9 11 15 18\n2\n", "expectedOutput": "0\n", "hidden": false },
+    { "id": "t3", "input": "7\n2 4 7 9 11 15 18\n9\n", "expectedOutput": "3\n", "hidden": false },
+    { "id": "t4", "input": "1\n5\n5\n", "expectedOutput": "0\n", "hidden": false },
+    { "id": "t5", "input": "7\n2 4 7 9 11 15 18\n99\n", "expectedOutput": "-1\n", "hidden": false },
+    { "id": "t6", "input": "6\n1 3 5 7 9 11\n11\n", "expectedOutput": "5\n", "hidden": true }
+  ]
+}

@@ -1,0 +1,31 @@
+services:
+  execution-node:
+    build:
+      context: ..
+      dockerfile: infra/execution-node.Dockerfile
+    ports:
+      - "8787:8787"
+    environment:
+      - AUTOPSY_SANDBOX=${AUTOPSY_SANDBOX:-local}
+      - AUTOPSY_NODE_SECRET=${AUTOPSY_NODE_SECRET:-}
+      - AUTOPSY_CALLBACK_URL=${AUTOPSY_CALLBACK_URL:-http://host.docker.internal:3000/api/internal/execution-callback}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  web:
+    image: node:22-bookworm
+    working_dir: /repo
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @codeautopsy/web dev"
+    ports:
+      - "3000:3000"
+    environment:
+      - EXECUTION_NODE_URL=http://execution-node:8787
+      - AUTOPSY_NODE_SECRET=${AUTOPSY_NODE_SECRET:-}
+      - DATABASE_URL=${DATABASE_URL:-}
+      - AUTOPSY_PROBLEMS_DIR=../problems
+    volumes:
+      - ..:/repo
+    depends_on:
+      - execution-node

@@ -1,0 +1,9 @@
+fastapi>=0.141
+uvicorn[standard]>=0.30
+pydantic>=2.13
+requests>=2.31
+httpx>=0.27
+# Week 2+:
+# sqlalchemy / psycopg / alembic (PostgreSQL)
+# celery
+# redis

@@ -1,0 +1,33 @@
+# deps
+node_modules/
+
+# builds
+dist/
+.next/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+
+# python spike (legacy)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# runtime artifacts
+*.out
+a.out
+student_bin*
+reference_bin*
+.data/
+
+# secrets
+.env
+.env.local
+
+# os
+Thumbs.db
+.DS_Store
+
+# zcode session files
+.zcode/
