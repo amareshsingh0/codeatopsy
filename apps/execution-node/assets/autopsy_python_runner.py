@@ -84,7 +84,7 @@ def _tracer(frame, event, arg):
         locs = {
             k: v
             for k, v in frame.f_locals.items()
-            if not k.startswith("__") or k in ("__name",)
+            if not k.startswith("__") and not k.startswith(".") and k != "_(dot)"
         }
         prev = _prev_locals.get(frame, {})
         changed_any = False
