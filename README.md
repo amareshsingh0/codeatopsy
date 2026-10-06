@@ -1,9 +1,10 @@
 # CodeAutopsy 🩺
 
-**Evidence-driven execution debugger for algorithms.** Submit C++, and CodeAutopsy
-instruments it, records every assignment, branch, call and return, replays your
-execution side-by-side against a correct reference — and shows you the **exact
-moment your logic diverges**, with a ranked root-cause report.
+**Evidence-driven execution debugger for algorithms.** Submit code in **C++, C,
+Python, JavaScript or Java**, and CodeAutopsy instruments it, records every
+assignment, branch, call and return, replays your execution side-by-side against
+a correct reference — and shows you the **exact moment your logic diverges**,
+with a ranked root-cause report.
 
 No more `cout`-guessing. Just evidence.
 
@@ -12,23 +13,30 @@ No more `cout`-guessing. Just evidence.
 ## How it works
 
 ```
- student C++ ──► instrumenter (probe injection) ──► g++ ──► traced run ──► JSONL trace
-                                                          │
- reference C++ ─► instrumenter ──► g++ ──► traced run ────┤
-                                                          ▼
-                                          trace-core: align + find first divergence
-                                                          ▼
-                                          explanation: ranked hypotheses + narrative
-                                                          ▼
-                                          visual trace player in the browser
+ student code ──► per-language engine ──────────► traced run ──► JSONL trace
+                                                  │
+ reference code ─► same engine ──► traced run ────┤
+                                                  ▼
+                                  trace-core: align + find first divergence
+                                                  ▼
+                                  explanation: ranked hypotheses + narrative
+                                                  ▼
+                                  visual trace player in the browser
 ```
 
-1. **Verdicts** — your code is compiled (`g++ -std=c++17 -O2`) and run against
-   every test; outputs, exit codes and time limits decide pass/fail.
+| Language | Verdicts | Full trace | How |
+|---|---|---|---|
+| C++17 | ✅ | ✅ | source-to-source probe injection (`AUTOPSY_*`) + `trace-runtime.hpp` |
+| C | ✅ | ✅* | compiled via g++ (most C code builds as C++) |
+| Python 3 | ✅ | ✅ | zero instrumentation — `sys.settrace` runner streams events |
+| JavaScript | ✅ | ✅ | acorn-AST instrumenter + JSONL runtime preamble |
+| Java 17 | ✅ | ⏳ | single-file `java` launch; trace coming soon |
+
+1. **Verdicts** — your code runs against every test; outputs, exit codes and
+   time limits decide pass/fail.
 2. **Autopsy** — if any test failed, *both* your code and the reference get
-   instrumented with lightweight probes (`AUTOPSY_ASSIGN`, `AUTOPSY_BRANCH`,
-   `AUTOPSY_CALL`, …) that stream JSONL events through `trace-runtime.hpp`
-   (hard event/time budgets so runaway loops can't flood it).
+   traced (C++: probes compiled in; Python: settrace; JS: AST-instrumented).
+   Hard event/time budgets mean runaway loops can't flood the trace.
 3. **Divergence** — both traces are aligned semantically (assignments by variable,
    branches by condition with fuzzy matching, so `left < right` vs `left <= right`
    still line up). The first value or control disagreement *is* the bug's moment.

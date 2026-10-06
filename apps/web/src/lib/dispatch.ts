@@ -1,5 +1,5 @@
 import "server-only";
-import { JobRequest, type SubmissionStatus } from "@codeautopsy/schemas";
+import { JobRequest, Language, type SubmissionStatus } from "@codeautopsy/schemas";
 import type { Problem } from "@codeautopsy/schemas";
 
 export const EXECUTION_NODE_URL =
@@ -10,11 +10,13 @@ export async function dispatchExecution(
   jobId: string,
   problem: Problem,
   source: string,
+  language?: Language,
 ): Promise<{ ok: boolean; error?: string }> {
   const body = JobRequest.parse({
     jobId,
     problem,
     source,
+    ...(language ? { language } : {}),
     autopsy: true,
   } satisfies JobRequest);
   try {

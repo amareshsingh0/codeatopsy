@@ -13,6 +13,7 @@ export const TraceEventKind = z.enum([
   "call", // entered a function
   "assign", // variable created or value changed
   "branch", // if / while / for / switch condition evaluated
+  "line", // statement executed without a variable change (python)
   "return", // function returned a value
   "returnvoid", // function returned without a value
   "output", // program wrote to stdout (checkpoint markers)
@@ -59,6 +60,21 @@ export const Trace = z.object({
 export type Trace = z.infer<typeof Trace>;
 
 /* ------------------------------------------------------------------ */
+/* Languages                                                           */
+/* ------------------------------------------------------------------ */
+
+export const Language = z.enum(["cpp", "c", "python", "javascript", "java"]);
+export type Language = z.infer<typeof Language>;
+
+export const LANGUAGE_LABEL: Record<Language, string> = {
+  cpp: "C++17",
+  c: "C",
+  python: "Python 3",
+  javascript: "JavaScript (Node)",
+  java: "Java 17",
+};
+
+/* ------------------------------------------------------------------ */
 /* Problems                                                            */
 /* ------------------------------------------------------------------ */
 
@@ -80,6 +96,7 @@ export const Problem = z.object({
   /** markdown statement */
   statement: z.string(),
   topics: z.array(z.string()).default([]),
+  language: Language.default("cpp"),
   timeLimitMs: z.number().int().positive().default(5000),
   memoryLimitMb: z.number().int().positive().default(256),
   tests: z.array(TestCase).min(1),
@@ -114,6 +131,8 @@ export const JobRequest = z.object({
   problem: Problem,
   /** the code being autopsied */
   source: z.string(),
+  /** overrides problem.language when set */
+  language: Language.optional(),
   /** run the instrumentation pipeline (default true) */
   autopsy: z.boolean().default(true),
 });
@@ -181,6 +200,7 @@ export type AutopsyReport = z.infer<typeof AutopsyReport>;
 
 export const ExecutionResult = z.object({
   ok: z.boolean(),
+  language: Language.optional(),
   compileError: z
     .object({
       side: z.enum(["student", "reference"]),

@@ -2,9 +2,28 @@
 import { useEffect, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { cpp } from "@codemirror/lang-cpp";
+import { python } from "@codemirror/lang-python";
+import { javascript } from "@codemirror/lang-javascript";
+import { java } from "@codemirror/lang-java";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { StateEffect, StateField, type Range } from "@codemirror/state";
 import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
+import type { Language } from "@codeautopsy/schemas";
+
+function langExtension(language: Language | undefined) {
+  switch (language) {
+    case "python":
+      return [python()];
+    case "javascript":
+      return [javascript()];
+    case "java":
+      return [java()];
+    case "c":
+    case "cpp":
+    default:
+      return [cpp()];
+  }
+}
 
 interface Highlights {
   currentLine: number | null;
@@ -42,6 +61,7 @@ const highlightField = StateField.define<DecorationSet>({
 export function CodeEditor({
   value,
   onChange,
+  language,
   currentLine = null,
   markerLine = null,
   markerClass = "cm-divergence-line",
@@ -50,6 +70,7 @@ export function CodeEditor({
 }: {
   value: string;
   onChange?: (value: string) => void;
+  language?: Language;
   currentLine?: number | null;
   markerLine?: number | null;
   markerClass?: string;
@@ -57,7 +78,7 @@ export function CodeEditor({
   readOnly?: boolean;
 }) {
   const viewRef = useRef<EditorView | null>(null);
-  const [extensions] = useState(() => [cpp(), highlightField, EditorView.lineWrapping]);
+  const [extensions] = useState(() => [...langExtension(language), highlightField, EditorView.lineWrapping]);
 
   useEffect(() => {
     viewRef.current?.dispatch({

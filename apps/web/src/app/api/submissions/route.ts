@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { getStore } from "@codeautopsy/db";
-import { Problem } from "@codeautopsy/schemas";
+import { Problem, Language } from "@codeautopsy/schemas";
 import { getFullProblem } from "@/lib/problems";
 import { dispatchExecution } from "@/lib/dispatch";
 
@@ -10,11 +10,11 @@ const MAX_TEXT = 100_000;
 
 /**
  * POST /api/submissions
- *   { problemId, source }                          — submit against a library problem
- *   { problemId: "playground", source, input?, expectedOutput? } — run ANY code
+ *   { problemId, source }                                — submit against a library problem
+ *   { problemId: "playground", source, input?, expectedOutput?, language? } — run ANY code
  */
 export async function POST(req: Request) {
-  let body: { problemId?: string; source?: string; input?: string; expectedOutput?: string };
+  let body: { problemId?: string; source?: string; input?: string; expectedOutput?: string; language?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -30,6 +30,7 @@ export async function POST(req: Request) {
   const input = typeof body.input === "string" ? body.input.slice(0, MAX_TEXT) : "";
   const expectedOutput =
     typeof body.expectedOutput === "string" ? body.expectedOutput.slice(0, MAX_TEXT) : "";
+  const language = body.language ? Language.parse(body.language) : undefined;
 
   let problem: Problem | null;
   if (problemId === "playground") {
@@ -41,6 +42,7 @@ export async function POST(req: Request) {
       blurb: "Standalone execution of your own code",
       statement: "Custom submission executed with your own stdin input.",
       topics: ["custom"],
+      language: language ?? "cpp",
       tests: [
         {
           id: "run-1",
@@ -63,7 +65,7 @@ export async function POST(req: Request) {
   await store.create({ id, problemId, source });
 
   // fire-and-forget: the execution node calls back with the result
-  const dispatch = await dispatchExecution(id, problem, source);
+  const dispatch = await dispatchExecution(id, problem, source, language);
   if (!dispatch.ok) {
     await store.fail(id, dispatch.error ?? "dispatch failed");
     return NextResponse.json(

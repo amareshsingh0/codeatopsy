@@ -62,6 +62,8 @@ function comparable(a: TraceEvent, b: TraceEvent): boolean {
     case "return":
     case "returnvoid":
       return true;
+    case "line":
+      return a.line === b.line;
     default:
       return false;
   }
@@ -88,6 +90,7 @@ function eventText(e: TraceEvent): string {
     case "call": return `call ${e.fn}()`;
     case "return": return `${e.fn}() returned ${e.value}`;
     case "returnvoid": return `${e.fn}() returned`;
+    case "line": return `executed line ${e.line}`;
     default: return e.kind;
   }
 }

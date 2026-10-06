@@ -1,11 +1,12 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Divergence, Trace } from "@codeautopsy/schemas";
+import type { Divergence, Language, Trace } from "@codeautopsy/schemas";
 import { CodeEditor } from "./CodeEditor";
 
 interface Props {
   studentSource: string;
   referenceSource?: string;
+  language?: Language;
   studentTrace: Trace;
   referenceTrace?: Trace | null;
   pairs?: Array<{ s: number; r: number }>;
@@ -18,6 +19,7 @@ const KIND_COLOR: Record<string, string> = {
   assign: "var(--accent)",
   branch: "var(--warn)",
   call: "var(--accent-2)",
+  line: "#9d7bff",
   return: "var(--accent-2)",
   returnvoid: "var(--accent-2)",
   output: "var(--muted)",
@@ -27,6 +29,7 @@ const KIND_LABEL: Record<string, string> = {
   assign: "assignment",
   branch: "condition",
   call: "call",
+  line: "statement",
   return: "return",
   returnvoid: "return",
   output: "output",
@@ -78,6 +81,7 @@ function snapshotVars(events: Trace["events"], uptoInclusive: number): Map<strin
 export function TraceViewer({
   studentSource,
   referenceSource = "",
+  language,
   studentTrace,
   referenceTrace = null,
   pairs = [],
@@ -178,6 +182,8 @@ export function TraceViewer({
         return `line ${current.line} · condition "${current.cond}" evaluated to ${current.taken ? "true" : "false"}`;
       case "call":
         return `line ${current.line} · entering function ${current.fn}()`;
+      case "line":
+        return `line ${current.line} · statement executed in ${current.fn}()`;
       case "return":
         return `line ${current.line} · ${current.fn}() returned ${current.value}`;
       case "returnvoid":
@@ -325,7 +331,7 @@ export function TraceViewer({
               {current ? `line ${current.line}` : ""}
             </span>
           </div>
-          <CodeEditor value={studentSource} currentLine={current?.line ?? null} markerLine={divergence?.studentLine ?? null} height="300px" />
+          <CodeEditor value={studentSource} language={language} currentLine={current?.line ?? null} markerLine={divergence?.studentLine ?? null} height="300px" />
         </div>
         {hasRef && showRef && (
           <div className="panel overflow-hidden">
@@ -337,6 +343,7 @@ export function TraceViewer({
             </div>
             <CodeEditor
               value={referenceSource}
+              language={language}
               currentLine={referenceTrace!.events[refIdx]?.line ?? null}
               markerLine={divergence?.referenceLine ?? null}
               height="300px"

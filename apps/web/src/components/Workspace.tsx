@@ -175,6 +175,7 @@ export function Workspace({ problem }: { problem: ClientProblem }) {
             <ClientCodeEditor
               value={source}
               onChange={setSource}
+              language={problem.language}
               markerLine={viewerData?.divergence?.studentLine ?? null}
               markerClass="cm-divergence-line"
               height="260px"
@@ -186,6 +187,7 @@ export function Workspace({ problem }: { problem: ClientProblem }) {
             <TraceViewer
               studentSource={source}
               referenceSource={viewerData.referenceSource}
+              language={problem.language}
               studentTrace={viewerData.studentTrace}
               referenceTrace={viewerData.referenceTrace}
               pairs={viewerData.pairs}

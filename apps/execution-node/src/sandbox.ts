@@ -36,6 +36,10 @@ export interface RunOptions {
 
 export interface Sandbox {
   readonly kind: "local" | "docker";
+  /** write a file into the sandbox workdir */
+  writeFile(name: string, content: string): void;
+  /** run an arbitrary command inside the sandbox (non-C++ languages) */
+  exec(cmd: string[], opts: { input?: string; timeoutMs?: number; env?: Record<string, string> }): Promise<RunResult>;
   /** compile C++ sources into an executable inside the sandbox workdir */
   compile(
     key: string,
@@ -105,6 +109,29 @@ export class LocalSandbox implements Sandbox {
     this.dir = mkdtempSync(join(osTmpdir(), "ca-exec-"));
   }
 
+  writeFile(name: string, content: string): void {
+    writeFileSync(join(this.dir, name), content);
+  }
+
+  async exec(
+    cmd: string[],
+    opts: { input?: string; timeoutMs?: number; env?: Record<string, string> },
+  ): Promise<RunResult> {
+    const r = await spawnCmd(cmd[0], cmd.slice(1), {
+      input: opts.input,
+      timeoutMs: opts.timeoutMs,
+      cwd: this.dir,
+      env: opts.env,
+    });
+    return {
+      stdout: r.stdout,
+      stderr: r.stderr,
+      exitCode: r.code,
+      timedOut: r.timedOut,
+      durationMs: r.durationMs,
+    };
+  }
+
   async compile(
     key: string,
     mainSource: string,
@@ -161,6 +188,41 @@ export class DockerSandbox implements Sandbox {
 
   private async docker(args: string[], opts: { input?: string; timeoutMs?: number } = {}) {
     return spawnCmd("docker", args, opts);
+  }
+
+  writeFile(name: string, content: string): void {
+    writeFileSync(join(this.dir, name), content);
+  }
+
+  async exec(
+    cmd: string[],
+    opts: { input?: string; timeoutMs?: number; env?: Record<string, string> },
+  ): Promise<RunResult> {
+    const envArgs: string[] = [];
+    for (const [k, v] of Object.entries(opts.env ?? {})) envArgs.push("-e", `${k}=${v}`);
+    const r = await this.docker(
+      [
+        "run", "--rm", "-i",
+        "--network=none",
+        "--memory=512m",
+        "--cpus=1",
+        "--pids-limit=128",
+        "--security-opt=no-new-privileges",
+        "-v", `${this.dir}:/work`,
+        "-w", "/work",
+        ...envArgs,
+        this.image,
+        ...cmd,
+      ],
+      { input: opts.input, timeoutMs: opts.timeoutMs },
+    );
+    return {
+      stdout: r.stdout,
+      stderr: r.stderr,
+      exitCode: r.code,
+      timedOut: r.timedOut,
+      durationMs: r.durationMs,
+    };
   }
 
   async compile(
