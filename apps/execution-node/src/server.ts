@@ -13,7 +13,8 @@ import { enqueueJob, getJob, newId, registerPayload, pruneJobs } from "./jobs";
 import { createSandbox } from "./sandbox";
 
 const app = Fastify({ logger: { level: process.env.AUTOPSY_LOG_LEVEL || "warn" }, bodyLimit: 8 * 1024 * 1024 });
-const PORT = Number(process.env.AUTOPSY_PORT || "8787");
+// Render/Railway inject PORT; AUTOPSY_PORT is the local default
+const PORT = Number(process.env.PORT || process.env.AUTOPSY_PORT || "8787");
 const SECRET = process.env.AUTOPSY_NODE_SECRET;
 
 app.addHook("onRequest", async (req, reply) => {
