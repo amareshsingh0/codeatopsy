@@ -36,4 +36,4 @@ EXPOSE 8787
 
 USER runner
 
-CMD ["node", "apps/execution-node/dist/server.js"]
+CMD ["node", "apps/execution-node/dist/server.cjs"]
