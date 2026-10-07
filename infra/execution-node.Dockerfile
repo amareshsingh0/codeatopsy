@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openjdk-17-jdk-headless \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -m -u 1000 runner
+RUN useradd -m runner
 
 # pnpm for the workspace build
 RUN npm install -g pnpm@9
