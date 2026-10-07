@@ -5,8 +5,8 @@
  *   javascript — node run → verdicts → acorn-instrumented trace run
  *   java    — single-file java run → verdicts (no trace yet)
  */
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   parseTraceJsonl,
@@ -21,8 +21,25 @@ import { buildReport } from "@codeautopsy/explanation";
 import type { Sandbox, RunResult } from "./sandbox";
 import { createSandbox } from "./sandbox";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const PYTHON_RUNNER = join(here, "..", "assets", "autopsy_python_runner.py");
+const here = (() => {
+  try {
+    return dirname(fileURLToPath(import.meta.url));
+  } catch {
+    return "";
+  }
+})();
+const PYTHON_RUNNER = (() => {
+  const candidates: string[] = [];
+  if (here) candidates.push(resolve(here, "..", "assets", "autopsy_python_runner.py"));
+  let dir = process.cwd();
+  for (let i = 0; i < 6; i++) {
+    candidates.push(join(dir, "apps", "execution-node", "assets", "autopsy_python_runner.py"));
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return candidates.find((c) => existsSync(c)) ?? candidates[0];
+})();
 const TRACE_PROBE_FLAGS = ["-O0", "-include", runtimeHeaderPath, "-DAUTOPSY=1"];
 
 function normalizeOutput(s: string): string {
