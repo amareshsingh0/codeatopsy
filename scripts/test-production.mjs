@@ -1,14 +1,12 @@
-import EmbeddedPostgres from "embedded-postgres";
+import { temporaryPostgres } from "./temporary-postgres.mjs";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
-const rootRequire = createRequire(join(root, "package.json"));
 const dbRequire = createRequire(join(root, "packages/db/package.json"));
 const webRequire = createRequire(join(root, "apps/web/package.json"));
 const postgres = dbRequire("postgres");
@@ -21,20 +19,9 @@ const port = () =>
       server.close(() => resolve(value));
     });
   });
-const [databasePort, workerPort, webPort] = await Promise.all([port(), port(), port()]);
-const directory = await mkdtemp(join(tmpdir(), "autopsy-prod-test-"));
-const password = randomUUID(),
-  secret = randomUUID();
-const database = new EmbeddedPostgres({
-  databaseDir: join(directory, "cluster"),
-  user: "postgres",
-  password,
-  port: databasePort,
-  persistent: false,
-  initdbFlags: ["--encoding=UTF8", "--locale=C"],
-  onLog: () => {},
-  onError: () => {},
-});
+const [workerPort, webPort] = await Promise.all([port(), port()]);
+const secret = randomUUID();
+const database = await temporaryPostgres();
 const children = [];
 let sql;
 function launch(cwd, args, env) {
@@ -82,9 +69,7 @@ async function ready(url, options = {}) {
   throw new Error("Production smoke service did not become ready");
 }
 try {
-  await database.initialise();
-  await database.start();
-  const url = `postgres://postgres:${password}@127.0.0.1:${databasePort}/postgres`;
+  const url = database.url;
   sql = postgres(url, { prepare: false });
   await sql.unsafe(await readFile(join(root, "packages/db/migrations/001_execution_jobs.sql"), "utf8"));
   const env = {

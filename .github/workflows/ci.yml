@@ -44,6 +44,9 @@ jobs:
       - name: Apply disposable production smoke database migration
         run: PGPASSWORD=ci-disposable psql -h 127.0.0.1 -U postgres -d autopsy_test -f packages/db/migrations/001_execution_jobs.sql
 
+      - name: Verify temporary Postgres test lifecycle
+        run: node scripts/test-postgres.mjs
+
       - name: Build
         run: pnpm build
 
