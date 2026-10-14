@@ -3,13 +3,7 @@
  * when no LLM provider is configured. Produces ranked hypotheses from the
  * evidence digest + divergence + verdicts.
  */
-import type {
-  AutopsyReport,
-  Divergence,
-  ExecutionResult,
-  Hypothesis,
-  Trace,
-} from "@codeautopsy/schemas";
+import type { AutopsyReport, Divergence, ExecutionResult, Hypothesis, Trace } from "@codeautopsy/schemas";
 import type { EvidenceDigest } from "@codeautopsy/trace-core";
 import { eventText } from "@codeautopsy/trace-core";
 
@@ -92,7 +86,8 @@ export function diagnose(
     } else if (d.kind === "missing" || d.kind === "extra") {
       hypotheses.push({
         id: "control-flow",
-        title: d.kind === "missing" ? "Your code stops earlier than the reference" : "Your code does extra work",
+        title:
+          d.kind === "missing" ? "Your code stops earlier than the reference" : "Your code does extra work",
         confidence: 0.55,
         mechanism: `The traces desynced: your execution shows “${d.studentText}” where the reference shows “${d.referenceText}”. A branch or loop boundary is shaped differently.`,
         lines: d.studentLine ? [d.studentLine] : [],
@@ -111,7 +106,9 @@ export function diagnose(
           .map((v) => `\`${v.name}\` you=${v.student} / ref=${v.reference}`)
           .join(", ")}. The earliest differing variable is the best place to look.`,
         lines: [],
-        evidence: disagreeing.map((v) => ({ description: `${v.name}: you=${v.student}, ref=${v.reference}` })),
+        evidence: disagreeing.map((v) => ({
+          description: `${v.name}: you=${v.student}, ref=${v.reference}`,
+        })),
       });
     }
   }
@@ -146,7 +143,11 @@ export function diagnose(
       ? `${headlineFor(result)} — but the execution traces match the reference. The bug likely lives outside the instrumented statements (e.g. output formatting).`
       : headlineFor(result);
 
-  return { headline, hypotheses, narrative: narrative(headline, hypotheses, evidence, divergence, result, !!referenceTrace) };
+  return {
+    headline,
+    hypotheses,
+    narrative: narrative(headline, hypotheses, evidence, divergence, result, !!referenceTrace),
+  };
 }
 
 function looksLikeOffByOne(studentCond: string, refCond?: string): boolean {
@@ -162,7 +163,9 @@ function headlineFor(result: ExecutionResult): string {
   const failed = result.verdicts.filter((v) => v.status !== "accepted");
   if (result.compileError) return "Compile error";
   if (failed.some((v) => v.status === "timeout")) return "Time limit exceeded";
-  if (failed.length === result.verdicts.length && result.verdicts.length > 0) return "Wrong answer on every test";
+  if (failed.some((v) => v.status === "runtime_error")) return "Runtime error";
+  if (failed.length === result.verdicts.length && result.verdicts.length > 0)
+    return "Wrong answer on every test";
   if (failed.length) return "Wrong answer";
   return "All tests passed";
 }
@@ -205,6 +208,8 @@ function narrative(
   if (verdictLines) {
     md.push(`### Per-test verdicts\n${verdictLines}\n`);
   }
+  if (result.warnings?.length)
+    md.push(`### Trace limitations\n${result.warnings.map((w) => `- ${w}`).join("\n")}\n`);
 
   if (!hasReference && !divergence) {
     md.push(

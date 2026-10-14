@@ -1,315 +1,344 @@
-/**
- * Sandbox abstraction. A sandbox compiles a set of C++ sources and runs a
- * binary against stdin with resource limits.
- *
- *  - LocalSandbox  — direct child processes; for development on trusted
- *                    machines. NOT a security boundary.
- *  - DockerSandbox — every compile/run goes through a locked-down container
- *                    (no network, memory/CPU/pids caps, non-root); for
- *                    production and untrusted submissions.
- */
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { osTmpdir } from "./util";
+import {
+  chmodSync,
+  closeSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  rmSync,
+  writeFileSync,
+  copyFileSync,
+} from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { osTmpdir } from "./util";
 
 export interface CompileResult {
   ok: boolean;
   stderr: string;
   durationMs: number;
 }
-
 export interface RunResult {
   stdout: string;
   stderr: string;
   exitCode: number | null;
   timedOut: boolean;
   durationMs: number;
+  outputLimitExceeded?: boolean;
 }
-
 export interface RunOptions {
   input: string;
   timeLimitMs: number;
   memoryLimitMb: number;
   env?: Record<string, string>;
 }
-
+export interface ExecOptions {
+  input?: string;
+  timeoutMs?: number;
+  memoryLimitMb?: number;
+  env?: Record<string, string>;
+}
 export interface Sandbox {
   readonly kind: "local" | "docker";
-  /** write a file into the sandbox workdir */
+  readonly dir: string;
+  path(name: string): string;
+  tracePath(name: string): string;
   writeFile(name: string, content: string): void;
-  /** run an arbitrary command inside the sandbox (non-C++ languages) */
-  exec(cmd: string[], opts: { input?: string; timeoutMs?: number; env?: Record<string, string> }): Promise<RunResult>;
-  /** compile C++ sources into an executable inside the sandbox workdir */
+  exec(cmd: string[], opts: ExecOptions): Promise<RunResult>;
   compile(
     key: string,
-    mainSource: string,
-    extraFlags: string[],
-    outExe: string,
+    source: string,
+    flags: string[],
+    out: string,
+    language?: "cpp" | "c",
   ): Promise<CompileResult>;
-  run(exeName: string, opts: RunOptions): Promise<RunResult>;
+  run(name: string, opts: RunOptions): Promise<RunResult>;
   cleanup(): void;
 }
 
-function spawnCmd(
-  cmd: string,
-  args: string[],
-  opts: { input?: string; timeoutMs?: number; cwd?: string; env?: Record<string, string> },
-): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean; durationMs: number }> {
+// Submitted programs receive toolchain settings, never worker credentials.
+function runtimeEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of [
+    "PATH",
+    "Path",
+    "SystemRoot",
+    "WINDIR",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "PATHEXT",
+  ]) {
+    if (process.env[key]) env[key] = process.env[key];
+  }
+  return { ...env, PYTHONIOENCODING: "utf-8", ...extra };
+}
+function filename(name: string): string {
+  if (!/^[a-zA-Z0-9_.-]+$/.test(name) || name === "." || name === "..")
+    throw new Error("Invalid sandbox filename");
+  return name;
+}
+interface SpawnOptions extends ExecOptions {
+  cwd?: string;
+  onTerminate?: () => Promise<void>;
+}
+export function spawnCmd(cmd: string, args: string[], opts: SpawnOptions): Promise<RunResult> {
   const start = Date.now();
   return new Promise((resolve) => {
+    // A regular stdin file supports streams and readFileSync(0) on Windows.
+    const inputPath = join(opts.cwd ?? osTmpdir(), "stdin-" + randomUUID() + ".txt");
+    writeFileSync(inputPath, opts.input ?? "");
+    const fd = openSync(inputPath, "r");
     const child = spawn(cmd, args, {
       cwd: opts.cwd,
-      env: opts.env ? { ...process.env, ...opts.env } : process.env,
-      stdio: ["pipe", "pipe", "pipe"],
+      env: runtimeEnv(opts.env),
+      stdio: [fd, "pipe", "pipe"],
       windowsHide: true,
+      detached: process.platform !== "win32",
     });
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
+    closeSync(fd);
+    let stdout = "",
+      stderr = "",
+      timedOut = false,
+      outputLimitExceeded = false;
+    let settled = false,
+      stopping = false;
+    let termination: Promise<void> = Promise.resolve();
+    let forceTimer: ReturnType<typeof setTimeout> | undefined;
     const cap = 256 * 1024;
-    child.stdout.on("data", (d) => {
-      if (stdout.length < cap) stdout += d.toString("utf8");
+    const finish = (exitCode: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(forceTimer);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      void termination.finally(() => {
+        try {
+          rmSync(inputPath, { force: true });
+        } catch {
+          /* cleanup retries at job end */
+        }
+        resolve({ stdout, stderr, exitCode, timedOut, outputLimitExceeded, durationMs: Date.now() - start });
+      });
+    };
+    const stop = () => {
+      if (stopping) return;
+      stopping = true;
+      if (opts.onTerminate) termination = opts.onTerminate().catch(() => {});
+      if (child.pid) {
+        if (process.platform === "win32") {
+          const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+            windowsHide: true,
+            stdio: "ignore",
+          });
+          killer.on("error", () => child.kill());
+        } else {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch {
+            child.kill("SIGKILL");
+          }
+        }
+      }
+      forceTimer = setTimeout(() => finish(null), 3000);
+    };
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk.slice(0, Math.max(0, cap - stdout.length));
+      if (stdout.length >= cap) {
+        outputLimitExceeded = true;
+        stop();
+      }
     });
-    child.stderr.on("data", (d) => {
-      if (stderr.length < cap) stderr += d.toString("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk.slice(0, Math.max(0, cap - stderr.length));
+      if (stderr.length >= cap) {
+        outputLimitExceeded = true;
+        stop();
+      }
     });
-    const timer =
-      opts.timeoutMs && opts.timeoutMs > 0
-        ? setTimeout(() => {
-            timedOut = true;
-            try {
-              child.kill("SIGKILL");
-            } catch {
-              /* already gone */
-            }
-          }, opts.timeoutMs)
-        : null;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      stop();
+    }, opts.timeoutMs ?? 30000);
     child.on("error", (err) => {
-      if (timer) clearTimeout(timer);
-      resolve({ stdout, stderr: `${stderr}\n${err.message}`, code: null, timedOut, durationMs: Date.now() - start });
+      stderr += "\n" + err.message;
+      finish(null);
     });
-    child.on("close", (code) => {
-      if (timer) clearTimeout(timer);
-      resolve({ stdout, stderr, code, timedOut, durationMs: Date.now() - start });
-    });
-    if (opts.input !== undefined) {
-      child.stdin.end(opts.input);
-    } else {
-      child.stdin.end();
-    }
+    child.on("close", finish);
   });
 }
-
 export class LocalSandbox implements Sandbox {
   readonly kind = "local" as const;
-  private readonly dir: string;
-
-  constructor() {
-    this.dir = mkdtempSync(join(osTmpdir(), "ca-exec-"));
+  readonly dir = mkdtempSync(join(osTmpdir(), "ca-exec-"));
+  path(name: string) {
+    return join(this.dir, filename(name));
   }
-
-  writeFile(name: string, content: string): void {
-    writeFileSync(join(this.dir, name), content);
+  tracePath(name: string) {
+    return this.path(name);
   }
-
-  async exec(
-    cmd: string[],
-    opts: { input?: string; timeoutMs?: number; env?: Record<string, string> },
-  ): Promise<RunResult> {
-    const r = await spawnCmd(cmd[0], cmd.slice(1), {
-      input: opts.input,
-      timeoutMs: opts.timeoutMs,
-      cwd: this.dir,
-      env: opts.env,
+  writeFile(name: string, content: string) {
+    writeFileSync(this.path(name), content);
+  }
+  exec(cmd: string[], opts: ExecOptions) {
+    return spawnCmd(cmd[0], cmd.slice(1), { ...opts, cwd: this.dir });
+  }
+  async compile(
+    _key: string,
+    source: string,
+    flags: string[],
+    out: string,
+    language: "cpp" | "c" = "cpp",
+  ): Promise<CompileResult> {
+    const name = language === "c" ? "src.c" : "src.cpp";
+    this.writeFile(name, source);
+    const compiler = language === "c" ? process.env.AUTOPSY_CC || "gcc" : process.env.AUTOPSY_CXX || "g++";
+    const std = language === "c" ? "-std=c11" : process.env.AUTOPSY_CXX_STD || "-std=c++17";
+    const r = await this.exec([compiler, std, "-O2", ...flags, "-o", this.path(out), this.path(name)], {
+      timeoutMs: 30000,
     });
     return {
-      stdout: r.stdout,
-      stderr: r.stderr,
-      exitCode: r.code,
-      timedOut: r.timedOut,
+      ok: r.exitCode === 0 && !r.timedOut && !r.outputLimitExceeded,
+      stderr: r.stderr || (r.timedOut ? "Compilation exceeded 30 seconds" : ""),
       durationMs: r.durationMs,
     };
   }
-
-  async compile(
-    key: string,
-    mainSource: string,
-    extraFlags: string[],
-    outExe: string,
-  ): Promise<CompileResult> {
-    void key;
-    const srcPath = join(this.dir, "src.cpp");
-    writeFileSync(srcPath, mainSource);
-    const cxx = process.env.AUTOPSY_CXX || "g++";
-    const stdFlag = process.env.AUTOPSY_CXX_STD || "-std=c++17";
-    const r = await spawnCmd(
-      cxx,
-      [stdFlag, "-O2", ...extraFlags, "-o", join(this.dir, outExe), srcPath],
-      { timeoutMs: 30000 },
-    );
-    return { ok: r.code === 0 && !r.timedOut, stderr: r.stderr, durationMs: r.durationMs };
-  }
-
-  async run(exeName: string, opts: RunOptions): Promise<RunResult> {
-    const r = await spawnCmd(join(this.dir, exeName), [], {
+  run(name: string, opts: RunOptions) {
+    const executable = process.platform === "win32" ? filename(name) + ".exe" : name;
+    return this.exec([this.path(executable)], {
       input: opts.input,
       timeoutMs: opts.timeLimitMs,
-      cwd: this.dir,
       env: opts.env,
     });
-    return {
-      stdout: r.stdout,
-      stderr: r.stderr,
-      exitCode: r.code,
-      timedOut: r.timedOut,
-      durationMs: r.durationMs,
-    };
   }
-
-  cleanup(): void {
-    try {
-      rmSync(this.dir, { recursive: true, force: true });
-    } catch {
-      /* best effort */
-    }
+  cleanup() {
+    rmSync(this.dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 }
-
 export class DockerSandbox implements Sandbox {
   readonly kind = "docker" as const;
-  private readonly dir: string;
-  private readonly image: string;
-
+  readonly dir: string;
+  private readonly image = process.env.AUTOPSY_DOCKER_IMAGE || "codeautopsy-sandbox:local";
   constructor() {
-    this.dir = mkdtempSync(join(osTmpdir(), "ca-docker-"));
-    this.image = process.env.AUTOPSY_DOCKER_IMAGE || "gcc:13-bookworm";
+    this.dir = mkdtempSync(join(process.env.AUTOPSY_WORK_DIR || osTmpdir(), "ca-docker-"));
+    chmodSync(this.dir, 0o777);
+    mkdirSync(join(this.dir, "traces"), { mode: 0o777 });
+    chmodSync(join(this.dir, "traces"), 0o777);
   }
-
-  private async docker(args: string[], opts: { input?: string; timeoutMs?: number } = {}) {
-    return spawnCmd("docker", args, opts);
+  path(name: string) {
+    return "/work/" + filename(name);
   }
-
-  writeFile(name: string, content: string): void {
-    writeFileSync(join(this.dir, name), content);
+  tracePath(name: string) {
+    return "/trace/" + filename(name);
   }
-
-  async exec(
-    cmd: string[],
-    opts: { input?: string; timeoutMs?: number; env?: Record<string, string> },
-  ): Promise<RunResult> {
-    const envArgs: string[] = [];
-    for (const [k, v] of Object.entries(opts.env ?? {})) envArgs.push("-e", `${k}=${v}`);
-    const r = await this.docker(
+  writeFile(name: string, content: string) {
+    writeFileSync(join(this.dir, filename(name)), content);
+  }
+  exec(cmd: string[], opts: ExecOptions): Promise<RunResult> {
+    return this.container(cmd, opts, false);
+  }
+  private container(cmd: string[], opts: ExecOptions, writableWork: boolean): Promise<RunResult> {
+    const name = "ca-" + randomUUID();
+    const envArgs = Object.entries(opts.env ?? {}).flatMap(([k, v]) => ["-e", k + "=" + v]);
+    return spawnCmd(
+      "docker",
       [
-        "run", "--rm", "-i",
+        "run",
+        "--rm",
+        "--name",
+        name,
+        "-i",
+        "--init",
         "--network=none",
-        "--memory=512m",
+        "--memory=" + (opts.memoryLimitMb ?? 512) + "m",
+        "--memory-swap=" + (opts.memoryLimitMb ?? 512) + "m",
         "--cpus=1",
         "--pids-limit=128",
         "--security-opt=no-new-privileges",
-        "-v", `${this.dir}:/work`,
-        "-w", "/work",
+        "--cap-drop=ALL",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=64m",
+        "--user",
+        "1000:1000",
+        "-v",
+        this.dir + ":/work" + (writableWork ? "" : ":ro"),
+        ...(!writableWork ? ["-v", join(this.dir, "traces") + ":/trace"] : []),
+        "-w",
+        "/work",
         ...envArgs,
         this.image,
         ...cmd,
       ],
-      { input: opts.input, timeoutMs: opts.timeoutMs },
+      {
+        ...opts,
+        cwd: this.dir,
+        env: undefined,
+        onTerminate: async () => {
+          await spawnCmd("docker", ["rm", "-f", name], { timeoutMs: 10000 });
+        },
+      },
     );
-    return {
-      stdout: r.stdout,
-      stderr: r.stderr,
-      exitCode: r.code,
-      timedOut: r.timedOut,
-      durationMs: r.durationMs,
-    };
   }
-
   async compile(
-    key: string,
-    mainSource: string,
-    extraFlags: string[],
-    outExe: string,
+    _key: string,
+    source: string,
+    flags: string[],
+    out: string,
+    language: "cpp" | "c" = "cpp",
   ): Promise<CompileResult> {
-    void key;
-    writeFileSync(join(this.dir, "src.cpp"), mainSource);
-    const cxx = process.env.AUTOPSY_CXX || "g++";
-    const stdFlag = process.env.AUTOPSY_CXX_STD || "-std=c++17";
-    const script = `${cxx} ${stdFlag} -O2 ${extraFlags.join(" ")} -o /work/${outExe} /work/src.cpp 2> /work/compile.err; echo $? > /work/compile.rc`;
-    const r = await this.docker(
+    const name = language === "c" ? "src.c" : "src.cpp";
+    this.writeFile(name, source);
+    const mapped = [...flags];
+    for (let i = 0; i < mapped.length - 1; i++) {
+      if (mapped[i] === "-include") {
+        copyFileSync(mapped[i + 1], join(this.dir, "trace-runtime.hpp"));
+        mapped[i + 1] = this.path("trace-runtime.hpp");
+      }
+    }
+    const r = await this.container(
       [
-        "run", "--rm",
-        "--network=none",
-        "--memory=512m",
-        "--cpus=1",
-        "--pids-limit=128",
-        "--security-opt=no-new-privileges",
-        "--read-only",
-        "--tmpfs", "/tmp:rw,size=32m",
-        "-v", `${this.dir}:/work`,
-        "-w", "/work",
-        "--user", "1000:1000",
-        this.image,
-        "bash", "-c", script,
+        language === "c" ? "gcc" : "g++",
+        language === "c" ? "-std=c17" : "-std=c++17",
+        "-O2",
+        ...mapped,
+        "-o",
+        this.path(out),
+        this.path(name),
       ],
       { timeoutMs: 60000 },
-    );
-    let stderr = "";
-    let rc = r.code === 0 ? -1 : 1;
-    try {
-      stderr = readText(join(this.dir, "compile.err"));
-      rc = parseInt(readText(join(this.dir, "compile.rc")).trim() || "1", 10);
-    } catch {
-      stderr = r.stderr;
-    }
-    return { ok: rc === 0 && !r.timedOut, stderr, durationMs: r.durationMs };
-  }
-
-  async run(exeName: string, opts: RunOptions): Promise<RunResult> {
-    const envArgs: string[] = [];
-    for (const [k, v] of Object.entries(opts.env ?? {})) envArgs.push("-e", `${k}=${v}`);
-    const r = await this.docker(
-      [
-        "run", "--rm", "-i",
-        "--network=none",
-        `--memory=${Math.max(opts.memoryLimitMb, 64)}m`,
-        "--cpus=1",
-        "--pids-limit=128",
-        "--security-opt=no-new-privileges",
-        "-v", `${this.dir}:/work`,
-        "-w", "/work",
-        ...envArgs,
-        this.image,
-        `./${exeName}`,
-      ],
-      { input: opts.input, timeoutMs: opts.timeLimitMs },
+      true,
     );
     return {
-      stdout: r.stdout,
-      stderr: r.stderr,
-      exitCode: r.code,
-      timedOut: r.timedOut,
+      ok: r.exitCode === 0 && !r.timedOut && !r.outputLimitExceeded,
+      stderr: r.stderr || (r.timedOut ? "Compilation exceeded 60 seconds" : ""),
       durationMs: r.durationMs,
     };
   }
-
-  cleanup(): void {
-    try {
-      rmSync(this.dir, { recursive: true, force: true });
-    } catch {
-      /* best effort */
-    }
+  run(name: string, opts: RunOptions) {
+    return this.exec([this.path(name)], {
+      input: opts.input,
+      timeoutMs: opts.timeLimitMs,
+      memoryLimitMb: opts.memoryLimitMb,
+      env: opts.env,
+    });
+  }
+  cleanup() {
+    rmSync(this.dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 }
-
-import { readFileSync } from "node:fs";
-function readText(p: string): string {
-  return readFileSync(p, "utf8");
-}
-
 export function createSandbox(): Sandbox {
-  if (process.env.AUTOPSY_SANDBOX === "docker") {
-    return new DockerSandbox();
+  const mode = process.env.AUTOPSY_SANDBOX ?? "local";
+  if (mode === "docker") return new DockerSandbox();
+  if (mode !== "local") throw new Error("Unknown AUTOPSY_SANDBOX: " + mode);
+  if (process.env.NODE_ENV === "production" && process.env.AUTOPSY_ALLOW_LOCAL_EXECUTION !== "true") {
+    throw new Error(
+      "Production execution requires AUTOPSY_SANDBOX=docker. Trusted local execution requires explicit AUTOPSY_ALLOW_LOCAL_EXECUTION=true.",
+    );
   }
   return new LocalSandbox();
 }

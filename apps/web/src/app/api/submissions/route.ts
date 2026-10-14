@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { getStore } from "@codeautopsy/db";
-import { Problem, Language } from "@codeautopsy/schemas";
+import { Problem, SubmissionRequest } from "@codeautopsy/schemas";
 import { getFullProblem } from "@/lib/problems";
 import { dispatchExecution } from "@/lib/dispatch";
-
-const MAX_SOURCE = 200_000;
-const MAX_TEXT = 100_000;
+import { configurationIssue } from "@/lib/readiness";
 
 /**
  * POST /api/submissions
@@ -14,23 +12,22 @@ const MAX_TEXT = 100_000;
  *   { problemId: "playground", source, input?, expectedOutput?, language? } — run ANY code
  */
 export async function POST(req: Request) {
-  let body: { problemId?: string; source?: string; input?: string; expectedOutput?: string; language?: string };
+  const issue = configurationIssue();
+  if (issue) return NextResponse.json({ error: issue }, { status: 503 });
+  let body: unknown;
   try {
-    body = (await req.json()) as typeof body;
+    body = await req.json();
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
-  const { problemId, source } = body;
-  if (!problemId || typeof source !== "string" || source.length === 0) {
-    return NextResponse.json({ error: "problemId and source are required" }, { status: 400 });
+  const parsed = SubmissionRequest.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "invalid submission", details: parsed.error.flatten() },
+      { status: 400 },
+    );
   }
-  if (source.length > MAX_SOURCE) {
-    return NextResponse.json({ error: "source too large (200 KB limit)" }, { status: 413 });
-  }
-  const input = typeof body.input === "string" ? body.input.slice(0, MAX_TEXT) : "";
-  const expectedOutput =
-    typeof body.expectedOutput === "string" ? body.expectedOutput.slice(0, MAX_TEXT) : "";
-  const language = body.language ? Language.parse(body.language) : undefined;
+  const { problemId, source, input, expectedOutput, language } = parsed.data;
 
   let problem: Problem | null;
   if (problemId === "playground") {
@@ -58,20 +55,35 @@ export async function POST(req: Request) {
     if (!problem) {
       return NextResponse.json({ error: `unknown problem "${problemId}"` }, { status: 404 });
     }
+    if (language && language !== problem.language) {
+      return NextResponse.json({ error: "language must match the library problem" }, { status: 400 });
+    }
   }
 
-  const store = getStore();
+  let store;
+  try {
+    store = getStore();
+  } catch {
+    return NextResponse.json(
+      { error: "Submission storage is unavailable. Check the production database configuration." },
+      { status: 503 },
+    );
+  }
   const id = randomUUID();
-  await store.create({ id, problemId, source });
+  try {
+    await store.create({ id, problemId, source });
+  } catch {
+    return NextResponse.json(
+      { error: "Submission could not be saved. Retry when storage is available." },
+      { status: 503 },
+    );
+  }
 
   // fire-and-forget: the execution node calls back with the result
   const dispatch = await dispatchExecution(id, problem, source, language);
   if (!dispatch.ok) {
     await store.fail(id, dispatch.error ?? "dispatch failed");
-    return NextResponse.json(
-      { id, status: "failed", error: dispatch.error },
-      { status: 502 },
-    );
+    return NextResponse.json({ id, status: "failed", error: dispatch.error }, { status: 502 });
   }
 
   return NextResponse.json({ id, status: "queued" }, { status: 202 });

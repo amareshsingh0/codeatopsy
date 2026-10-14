@@ -4,6 +4,7 @@ node_modules/
 # builds
 dist/
 .next/
+.next-local-*/
 .turbo/
 *.tsbuildinfo
 next-env.d.ts
@@ -33,4 +34,5 @@ Thumbs.db
 .zcode/
 
 .vercel
+apps/web/public/visuals/*.png
 .env*

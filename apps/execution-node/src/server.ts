@@ -1,71 +1,24 @@
-/**
- * Execution node — a small Fastify service the web API delegates execution to.
- *
- *   POST /jobs        enqueue an execution job (validated JobRequest)
- *   GET  /jobs/:id    poll job status/result
- *   GET  /health      liveness + provider info
- *
- * Auth: when AUTOPSY_NODE_SECRET is set, all routes require `x-autopsy-secret`.
- */
-import Fastify from "fastify";
-import { JobRequest } from "@codeautopsy/schemas";
-import { enqueueJob, getJob, newId, registerPayload, pruneJobs } from "./jobs";
+import { createApp } from "./app";
+import { pruneJobs } from "./jobs";
 import { createSandbox } from "./sandbox";
 
-const app = Fastify({ logger: { level: process.env.AUTOPSY_LOG_LEVEL || "warn" }, bodyLimit: 8 * 1024 * 1024 });
-// Render/Railway inject PORT; AUTOPSY_PORT is the local default
-const PORT = Number(process.env.PORT || process.env.AUTOPSY_PORT || "8787");
-const SECRET = process.env.AUTOPSY_NODE_SECRET;
-
-app.addHook("onRequest", async (req, reply) => {
-  if (!SECRET) return;
-  if (req.headers["x-autopsy-secret"] !== SECRET) {
-    await reply.code(401).send({ error: "unauthorized" });
-  }
-});
-
+const app = createApp();
 setInterval(pruneJobs, 10 * 60 * 1000).unref();
-
-app.get("/health", async () => ({
-  ok: true,
-  sandbox: createSandbox().kind,
-  version: "1.0.0",
-}));
-
-app.post("/jobs", async (req, reply) => {
-  const parsed = JobRequest.safeParse(req.body);
-  if (!parsed.success) {
-    return reply.code(400).send({ error: "invalid job", details: parsed.error.flatten() });
-  }
-  const jobId = parsed.data.jobId || newId();
-  const job = { ...parsed.data, jobId };
-  registerPayload(job);
-  const rec = enqueueJob(job);
-  return reply.code(202).send({ jobId: rec.jobId, status: rec.status });
+async function start() {
+  const sandbox = createSandbox();
+  sandbox.cleanup();
+  const port = Number(process.env.PORT || process.env.AUTOPSY_PORT || "8787");
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid execution node port");
+  await app.listen({ port, host: process.env.AUTOPSY_HOST || "127.0.0.1" });
+  console.log(`[execution-node] listening on :${port} (sandbox=${sandbox.kind})`);
+}
+void start().catch((err) => {
+  app.log.error(err);
+  process.exitCode = 1;
 });
-
-app.get<{ Params: { id: string } }>("/jobs/:id", async (req, reply) => {
-  const rec = getJob(req.params.id);
-  if (!rec) return reply.code(404).send({ error: "unknown job" });
-  return {
-    jobId: rec.jobId,
-    status: rec.status,
-    result: rec.result,
-    error: rec.error,
-    createdAt: rec.createdAt,
-    completedAt: rec.completedAt,
-  };
-});
-
-const start = async () => {
-  try {
-    await app.listen({ port: PORT, host: process.env.AUTOPSY_HOST || "127.0.0.1" });
-    console.log(`[execution-node] listening on :${PORT} (sandbox=${createSandbox().kind})`);
-  } catch (err) {
-    app.log.error(err);
-    process.exit(1);
-  }
-};
-void start();
-
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.on(signal, () => {
+    void app.close().then(() => process.exit(0));
+  });
+}
 export default app;

@@ -26,25 +26,101 @@ interface Insertion {
 }
 
 const CONTROL_KEYWORDS = new Set([
-  "if", "while", "for", "switch", "else", "do", "return", "case", "goto",
-  "break", "continue", "using", "namespace", "template", "typedef", "try",
-  "catch", "throw", "asm", "public", "private", "protected", "static_assert",
-  "static_cast", "const_cast", "reinterpret_cast", "dynamic_cast", "new",
-  "delete", "sizeof", "alignof", "typeid", "co_await", "co_yield", "co_return",
+  "if",
+  "while",
+  "for",
+  "switch",
+  "else",
+  "do",
+  "return",
+  "case",
+  "goto",
+  "break",
+  "continue",
+  "using",
+  "namespace",
+  "template",
+  "typedef",
+  "try",
+  "catch",
+  "throw",
+  "asm",
+  "public",
+  "private",
+  "protected",
+  "static_assert",
+  "static_cast",
+  "const_cast",
+  "reinterpret_cast",
+  "dynamic_cast",
+  "new",
+  "delete",
+  "sizeof",
+  "alignof",
+  "typeid",
+  "co_await",
+  "co_yield",
+  "co_return",
 ]);
 
 const BUILTIN_TYPES = new Set([
-  "bool", "char", "wchar_t", "char8_t", "char16_t", "char32_t", "short",
-  "int", "long", "float", "double", "signed", "unsigned", "size_t", "ssize_t",
-  "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t",
+  "bool",
+  "char",
+  "wchar_t",
+  "char8_t",
+  "char16_t",
+  "char32_t",
+  "short",
+  "int",
+  "long",
+  "float",
+  "double",
+  "signed",
+  "unsigned",
+  "size_t",
+  "ssize_t",
+  "int8_t",
+  "int16_t",
+  "int32_t",
+  "int64_t",
+  "uint8_t",
+  "uint16_t",
+  "uint32_t",
+  "uint64_t",
 ]);
 
-const TYPE_QUALIFIERS = new Set(["const", "static", "volatile", "register", "constexpr", "unsigned", "signed", "long", "short"]);
+const TYPE_QUALIFIERS = new Set([
+  "const",
+  "static",
+  "volatile",
+  "register",
+  "constexpr",
+  "unsigned",
+  "signed",
+  "long",
+  "short",
+]);
 
 const STREAMABLE_TYPES = new Set([
-  "bool", "char", "wchar_t", "short", "int", "long", "float", "double",
-  "signed", "unsigned", "size_t", "ssize_t", "long long", "unsigned long",
-  "unsigned int", "unsigned long long", "unsigned char", "string", "std::string",
+  "bool",
+  "char",
+  "wchar_t",
+  "short",
+  "int",
+  "long",
+  "float",
+  "double",
+  "signed",
+  "unsigned",
+  "size_t",
+  "ssize_t",
+  "long long",
+  "unsigned long",
+  "unsigned int",
+  "unsigned long long",
+  "unsigned char",
+  "string",
+  "std::string",
 ]);
 
 const ASSIGN_OPS = new Set(["=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="]);
@@ -75,7 +151,75 @@ function cEscape(s: string): string {
 
 type ScopeKind = "fn" | "ctrl" | "block" | "other" | "init";
 
+/** Add braces around complete control bodies, preserving lines and dangling-else binding. */
+function braceControlBodies(src: string): string {
+  const tokens = tokenize(src).filter((t) => t.type !== "comment" && t.type !== "preproc");
+  const pairs = new Map<number, number>();
+  const stack: number[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const text = tokens[i].text;
+    if (tokens[i].type !== "punct") continue;
+    if ("([{".includes(text)) stack.push(i);
+    else if (")]}".includes(text)) {
+      const open = stack.pop();
+      if (open !== undefined) pairs.set(open, i);
+    }
+  }
+  const text = (i: number) => tokens[i]?.text;
+  const doTails = new Set<number>();
+  const statementEnd = (start: number, depth = 0): number => {
+    if (depth > 100 || start >= tokens.length) return -1;
+    if (text(start) === "{") return pairs.get(start) ?? -1;
+    if (["if", "for", "while", "switch"].includes(text(start) ?? "") && text(start + 1) === "(") {
+      const close = pairs.get(start + 1);
+      if (close === undefined) return -1;
+      let end = statementEnd(close + 1, depth + 1);
+      if (text(start) === "if" && text(end + 1) === "else") end = statementEnd(end + 2, depth + 1);
+      return end;
+    }
+    if (text(start) === "do") {
+      const bodyEnd = statementEnd(start + 1, depth + 1);
+      if (text(bodyEnd + 1) === "while") {
+        doTails.add(bodyEnd + 1);
+        const close = pairs.get(bodyEnd + 2);
+        return close === undefined ? -1 : text(close + 1) === ";" ? close + 1 : close;
+      }
+      return -1;
+    }
+    for (let i = start; i < tokens.length; i++) {
+      if (text(i) === ";") return i;
+      if (text(i) === "}") return -1;
+      if (pairs.has(i)) i = pairs.get(i)!;
+    }
+    return -1;
+  };
+  // Discover do/while tails before treating while as a standalone loop.
+  for (let i = 0; i < tokens.length; i++) if (text(i) === "do") statementEnd(i);
+  const bodies = new Map<number, number>();
+  for (let i = 0; i < tokens.length; i++) {
+    let start = -1;
+    if (["if", "for", "while", "switch"].includes(text(i) ?? "") && !doTails.has(i) && text(i + 1) === "(") {
+      const close = pairs.get(i + 1);
+      if (close !== undefined) start = close + 1;
+    } else if (text(i) === "else" || text(i) === "do") start = i + 1;
+    if (start < 0 || text(start) === "{") continue;
+    const end = statementEnd(start);
+    if (end >= start) bodies.set(start, end);
+  }
+  const insertions = [...bodies]
+    .flatMap(([start, end]) => [
+      { pos: tokens[start].start, text: "{ " },
+      { pos: tokens[end].end, text: " }" },
+    ])
+    .sort((a, b) => b.pos - a.pos);
+  let buffer = Buffer.from(src, "utf8");
+  for (const item of insertions)
+    buffer = Buffer.concat([buffer.subarray(0, item.pos), Buffer.from(item.text), buffer.subarray(item.pos)]);
+  return buffer.toString("utf8");
+}
+
 export function instrument(src: string): InstrumentResult {
+  src = braceControlBodies(src);
   const toks = tokenize(src);
   const notes: string[] = [];
 
@@ -140,12 +284,14 @@ export function instrument(src: string): InstrumentResult {
   let cur: number | null = null; // sig idx of current statement start
   let curFn = "";
 
-  const inside = () => scopeStack.length > 0 && ["fn", "ctrl", "block"].includes(scopeStack[scopeStack.length - 1]);
+  const inside = () =>
+    scopeStack.length > 0 && ["fn", "ctrl", "block"].includes(scopeStack[scopeStack.length - 1]);
 
   /** top-level split of sig range [a, b) by a punct */
   const splitTop = (a: number, b: number, sep: string): number[] => {
     const parts: number[] = [];
-    const depthChars = "([{", closeChars = ")]}";
+    const depthChars = "([{",
+      closeChars = ")]}";
     let depth = 0;
     for (let k = a; k < b; k++) {
       const t = S(k)!;
@@ -163,7 +309,10 @@ export function instrument(src: string): InstrumentResult {
     if (closeIdx === undefined || closeIdx === openIdx + 1) return; // empty cond
     const first = S(openIdx + 1)!;
     // `if (int x = f())` — declaration condition; leave alone
-    if (first.type === "id" && (BUILTIN_TYPES.has(first.text) || TYPE_QUALIFIERS.has(first.text) || first.text === "auto")) {
+    if (
+      first.type === "id" &&
+      (BUILTIN_TYPES.has(first.text) || TYPE_QUALIFIERS.has(first.text) || first.text === "auto")
+    ) {
       notes.push(`line ${kwIdx ? S(kwIdx)!.line : 0}: declaration-condition left uninstrumented`);
       return;
     }
@@ -203,13 +352,15 @@ export function instrument(src: string): InstrumentResult {
     // update: wrap each comma-separated simple mutation
     if (closeIdx > s2 + 1) {
       const commas = splitTop(s2 + 1, closeIdx, ",");
-      const bounds = [s2 + 1, ...commas.map((c) => c + 1), closeIdx];
-      for (let p = 0; p < bounds.length - 1; p++) {
-        const a = bounds[p], b = bounds[p + 1];
+      const starts = [s2 + 1, ...commas.map((c) => c + 1)];
+      const ends = [...commas, closeIdx];
+      for (let p = 0; p < starts.length; p++) {
+        const a = starts[p],
+          b = ends[p];
         const target = simpleMutationTarget(a, b);
         if (target) {
-          ins(toks[sig[a]].start, `(AUTOPSY_ASSIGNV("${target}", ${S(a)!.line}, `);
-          ins(toks[sig[b - 1]].end, `))`);
+          ins(toks[sig[a]].start, `(`);
+          ins(toks[sig[b - 1]].end, `, AUTOPSY_ASSIGNV("${target}", ${S(a)!.line}, ${target}))`);
         }
       }
     }
@@ -226,22 +377,30 @@ export function instrument(src: string): InstrumentResult {
     }
     // declaration: walk a small type grammar
     let k = a;
-    while (k < b && (S(k)!.type === "id" && TYPE_QUALIFIERS.has(S(k)!.text) || S(k)!.text === "const")) k++;
+    while (k < b && ((S(k)!.type === "id" && TYPE_QUALIFIERS.has(S(k)!.text)) || S(k)!.text === "const")) k++;
     let base = "";
     if (k < b && S(k)!.type === "id") {
       if (BUILTIN_TYPES.has(S(k)!.text)) {
         base = S(k)!.text;
         k++;
         // "long long", "unsigned long", etc.
-        while (k < b && S(k)!.type === "id" && (BUILTIN_TYPES.has(S(k)!.text) || TYPE_QUALIFIERS.has(S(k)!.text))) {
-          if (/^(int|long|short|char|double|float|unsigned|signed|long long)$/.test(S(k)!.text) || BUILTIN_TYPES.has(S(k)!.text)) {
+        while (
+          k < b &&
+          S(k)!.type === "id" &&
+          (BUILTIN_TYPES.has(S(k)!.text) || TYPE_QUALIFIERS.has(S(k)!.text))
+        ) {
+          if (
+            /^(int|long|short|char|double|float|unsigned|signed|long long)$/.test(S(k)!.text) ||
+            BUILTIN_TYPES.has(S(k)!.text)
+          ) {
             base += " " + S(k)!.text;
             k++;
           } else break;
         }
         base = base.trim();
       } else if (/^(std::)?(string|vector)$/.test(S(k)!.text)) {
-        base = S(k)!.text === "string" ? "std::string" : S(k)!.text === "std::string" ? "std::string" : S(k)!.text;
+        base =
+          S(k)!.text === "string" ? "std::string" : S(k)!.text === "std::string" ? "std::string" : S(k)!.text;
         if (st(k + 1) === "<") {
           const closeT = match.get(k + 1);
           if (closeT !== undefined && closeT < b) {
@@ -259,14 +418,23 @@ export function instrument(src: string): InstrumentResult {
     if (!isProbeableType(base)) return;
     const eqIdx = k + 1;
     ins(toks[sig[eqIdx]].end, ` AUTOPSY_ASSIGNV("${nameTok.text}", ${nameTok.line}, `);
-    ins(toks[sig[semiIdx]].start, `)`);
+    const initEnd = st(eqIdx) === "{" ? match.get(eqIdx) : semiIdx;
+    if (initEnd !== undefined) ins(toks[sig[initEnd]].start, `)`);
   };
 
   /** if sig range [a,b) is a simple single-variable mutation, return the var name */
   const simpleMutationTarget = (a: number, b: number): string | null => {
     if (b - a < 2 || b - a > 6) return null;
-    const t0 = S(a)!, t1 = S(a + 1)!;
-    if (t0.type === "punct" && (t0.text === "++" || t0.text === "--") && t1.type === "id" && !CONTROL_KEYWORDS.has(t1.text) && b - a === 2) return t1.text;
+    const t0 = S(a)!,
+      t1 = S(a + 1)!;
+    if (
+      t0.type === "punct" &&
+      (t0.text === "++" || t0.text === "--") &&
+      t1.type === "id" &&
+      !CONTROL_KEYWORDS.has(t1.text) &&
+      b - a === 2
+    )
+      return t1.text;
     if (t0.type === "id" && !CONTROL_KEYWORDS.has(t0.text)) {
       if (t1.type === "punct" && (t1.text === "++" || t1.text === "--") && b - a === 2) return t0.text;
       if (t1.type === "punct" && ASSIGN_OPS.has(t1.text)) return t0.text;
@@ -285,7 +453,8 @@ export function instrument(src: string): InstrumentResult {
     }
     if (nt.type === "punct" && nt.text === "{") return; // braced init list — skip
     // find terminating ';' at depth 0
-    let depth = 0, k = next;
+    let depth = 0,
+      k = next;
     for (; k < sigCount; k++) {
       const t = S(k)!;
       if (t.type === "punct") {
@@ -388,11 +557,17 @@ export function instrument(src: string): InstrumentResult {
     if (BUILTIN_TYPES.has(t.text)) {
       const words: string[] = [t.text];
       k++;
-      while (k < semiIdx && S(k)!.type === "id" && (BUILTIN_TYPES.has(S(k)!.text) || TYPE_QUALIFIERS.has(S(k)!.text))) {
+      while (
+        k < semiIdx &&
+        S(k)!.type === "id" &&
+        (BUILTIN_TYPES.has(S(k)!.text) || TYPE_QUALIFIERS.has(S(k)!.text))
+      ) {
         words.push(S(k)!.text);
         k++;
       }
-      base = words.filter((w) => w !== "const" && w !== "static" && w !== "constexpr" && w !== "volatile").join(" ");
+      base = words
+        .filter((w) => w !== "const" && w !== "static" && w !== "constexpr" && w !== "volatile")
+        .join(" ");
     } else if (/^(std::)?(string|vector)$/.test(t.text)) {
       base = t.text.startsWith("std::") ? t.text : `std::${t.text}`;
       k++;
@@ -400,7 +575,8 @@ export function instrument(src: string): InstrumentResult {
         if (st(k) !== "<") return [];
         const closeT = match.get(k);
         if (closeT === undefined || closeT >= semiIdx) return [];
-        base = base + "<" + src.slice(toks[sig[k + 1]]?.start ?? 0, toks[sig[closeT]]?.start ?? 0).trim() + ">";
+        base =
+          base + "<" + src.slice(toks[sig[k + 1]]?.start ?? 0, toks[sig[closeT]]?.start ?? 0).trim() + ">";
         k = closeT + 1;
       }
     } else return [];
@@ -420,7 +596,9 @@ export function instrument(src: string): InstrumentResult {
       }
       const initTok = S(nk);
       const hasInit =
-        initTok && initTok.type === "punct" && (initTok.text === "=" || initTok.text === "{" || initTok.text === "(");
+        initTok &&
+        initTok.type === "punct" &&
+        (initTok.text === "=" || initTok.text === "{" || initTok.text === "(");
       if (hasInit && isProbeableType(base)) names.push(name);
       // advance to next comma or end
       let depth = 0;
@@ -467,10 +645,14 @@ export function instrument(src: string): InstrumentResult {
           const prev = S(k - 1);
           const prev2 = S(k - 2);
           const isTypeDecl =
-            (prev && prev.type === "id" && ["struct", "class", "union", "enum", "namespace"].includes(prev.text)) ||
+            (prev &&
+              prev.type === "id" &&
+              ["struct", "class", "union", "enum", "namespace"].includes(prev.text)) ||
             (prev2 && prev2.type === "id" && ["enum", "union"].includes(prev2.text));
           const isLambda =
-            prev && prev.type === "punct" && prev.text === ")" &&
+            prev &&
+            prev.type === "punct" &&
+            prev.text === ")" &&
             (() => {
               const open = match.get(sig[k - 1]);
               return open !== undefined && st(open - 1) === "]";
@@ -526,11 +708,7 @@ export function instrument(src: string): InstrumentResult {
   let buf = Buffer.from(src, "utf8");
   const sorted = [...insertions].sort((x, y) => y.pos - x.pos || y.seq - x.seq);
   for (const item of sorted) {
-    buf = Buffer.concat([
-      buf.subarray(0, item.pos),
-      Buffer.from(item.text, "utf8"),
-      buf.subarray(item.pos),
-    ]);
+    buf = Buffer.concat([buf.subarray(0, item.pos), Buffer.from(item.text, "utf8"), buf.subarray(item.pos)]);
   }
 
   return { code: buf.toString("utf8"), probes: insertions.length, notes };

@@ -1,0 +1,28 @@
+# Dedicated Linux Docker host. Vercel continues to host the web/API.
+# The host work directory must exist and be writable by the worker's runner user.
+services:
+  execution-node:
+    build:
+      context: ..
+      dockerfile: infra/execution-node.Dockerfile
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?Configure the queue database in the host secret environment}
+      AUTOPSY_NODE_SECRET: ${AUTOPSY_NODE_SECRET:?Configure shared authentication}
+      AUTOPSY_SANDBOX: docker
+      AUTOPSY_DOCKER_IMAGE: codeautopsy-sandbox:local
+      AUTOPSY_WORK_DIR: /var/lib/codeautopsy/work
+      AUTOPSY_HOST: 0.0.0.0
+      AUTOPSY_CALLBACK_URL: ${AUTOPSY_CALLBACK_URL:-}
+      AUTOPSY_CONCURRENCY: ${AUTOPSY_CONCURRENCY:-1}
+      AUTOPSY_MAX_JOBS: ${AUTOPSY_MAX_JOBS:-100}
+    volumes:
+      # The daemon resolves bind paths on the host; use the same absolute path in both namespaces.
+      - /var/lib/codeautopsy/work:/var/lib/codeautopsy/work
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - ${DOCKER_GID:?Set the host Docker socket group ID}
+    restart: unless-stopped
+    stop_grace_period: 15s

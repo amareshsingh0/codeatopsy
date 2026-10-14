@@ -7,11 +7,13 @@
  * `getStore()` picks based on DATABASE_URL so the app is fully functional
  * with no infrastructure at all.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, inArray } from "drizzle-orm";
+import { Submission as SubmissionSchema } from "@codeautopsy/schemas";
 import type { ExecutionResult, Submission, SubmissionStatus } from "@codeautopsy/schemas";
 import { submissions } from "./schema";
 
@@ -72,23 +74,32 @@ class PgStore implements SubmissionStore {
   }
 
   async list(limit = 20): Promise<Submission[]> {
-    const rows = await this.db
-      .select()
-      .from(submissions)
-      .orderBy(desc(submissions.createdAt))
-      .limit(limit);
+    const rows = await this.db.select().from(submissions).orderBy(desc(submissions.createdAt)).limit(limit);
     return rows.map(rowToSubmission);
   }
 
   async setStatus(id: string, status: SubmissionStatus): Promise<void> {
-    await this.db.update(submissions).set({ status }).where(eq(submissions.id, id));
+    await this.db
+      .update(submissions)
+      .set({ status })
+      .where(
+        and(
+          eq(submissions.id, id),
+          inArray(submissions.status, ["queued", "compiling", "running", "analyzing"]),
+        ),
+      );
   }
 
   async complete(id: string, result: ExecutionResult): Promise<void> {
     await this.db
       .update(submissions)
       .set({ status: "completed", result, completedAt: new Date() })
-      .where(eq(submissions.id, id));
+      .where(
+        and(
+          eq(submissions.id, id),
+          inArray(submissions.status, ["queued", "compiling", "running", "analyzing"]),
+        ),
+      );
   }
 
   async fail(id: string, error: string): Promise<void> {
@@ -100,7 +111,12 @@ class PgStore implements SubmissionStore {
         result: emptyFailure(error),
         completedAt: new Date(),
       })
-      .where(eq(submissions.id, id));
+      .where(
+        and(
+          eq(submissions.id, id),
+          inArray(submissions.status, ["queued", "compiling", "running", "analyzing"]),
+        ),
+      );
   }
 
   async close(): Promise<void> {
@@ -112,38 +128,46 @@ class PgStore implements SubmissionStore {
 
 class FileStore implements SubmissionStore {
   readonly kind = "file" as const;
-  private readonly data: Map<string, Submission>;
-  private readonly path: string;
+  private readonly recordsDir: string;
 
   constructor(path = join(process.cwd(), ".data", "submissions.json")) {
-    this.path = path;
-    try {
-      mkdirSync(dirname(path), { recursive: true });
-    } catch {
-      // read-only FS — fall back to memory-only
-    }
-    this.data = new Map();
-    if (existsSync(path)) {
-      try {
-        for (const s of JSON.parse(readFileSync(path, "utf8")) as Submission[]) {
-          this.data.set(s.id, s);
-        }
-      } catch {
-        // corrupted store — start fresh rather than crash
+    this.recordsDir = `${path}.d`;
+    mkdirSync(this.recordsDir, { recursive: true });
+    if (existsSync(/* turbopackIgnore: true */ path)) {
+      // Preserve existing installations. Corruption is surfaced, never erased.
+      for (const item of JSON.parse(readFileSync(/* turbopackIgnore: true */ path, "utf8")) as unknown[]) {
+        const s = SubmissionSchema.parse(item);
+        if (!existsSync(this.recordPath(s.id))) this.persist(s);
       }
     }
   }
 
-  private persist(): void {
+  private recordPath(id: string): string {
+    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) throw new Error("Invalid submission ID");
+    return join(this.recordsDir, `${id}.json`);
+  }
+
+  private read(id: string): Submission | null {
+    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) return null;
+    const path = this.recordPath(id);
+    if (!existsSync(path)) return null;
+    return SubmissionSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+  }
+
+  private persist(submission: Submission): void {
+    const path = this.recordPath(submission.id);
+    const temp = `${path}.${randomUUID()}.tmp`;
     try {
-      writeFileSync(this.path, JSON.stringify([...this.data.values()], null, 2));
-    } catch {
-      // in-memory fallback on write failure
+      writeFileSync(temp, JSON.stringify(submission), { flag: "wx" });
+      renameSync(temp, path);
+    } finally {
+      rmSync(temp, { force: true });
     }
   }
 
   async create(input: { id: string; problemId: string; source: string }): Promise<void> {
-    this.data.set(input.id, {
+    if (this.read(input.id)) throw new Error("Submission already exists");
+    this.persist({
       id: input.id,
       problemId: input.problemId,
       source: input.source,
@@ -152,42 +176,46 @@ class FileStore implements SubmissionStore {
       completedAt: null,
       result: null,
     });
-    this.persist();
   }
 
   async get(id: string): Promise<Submission | null> {
-    return this.data.get(id) ?? null;
+    return this.read(id);
   }
 
   async list(limit = 20): Promise<Submission[]> {
-    return [...this.data.values()].slice(-limit).reverse();
+    if (!Number.isInteger(limit) || limit < 1) return [];
+    return readdirSync(this.recordsDir)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => this.read(name.slice(0, -5))!)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id))
+      .slice(0, limit);
   }
 
   async setStatus(id: string, status: SubmissionStatus): Promise<void> {
-    const s = this.data.get(id);
-    if (s) {
+    const s = this.read(id);
+    if (s && s.status !== "completed" && s.status !== "failed") {
       s.status = status;
-      this.persist();
+      this.persist(s);
     }
   }
 
   async complete(id: string, result: ExecutionResult): Promise<void> {
-    const s = this.data.get(id);
-    if (s) {
+    const s = this.read(id);
+    if (s && s.status !== "completed" && s.status !== "failed") {
       s.status = "completed";
       s.result = result;
       s.completedAt = new Date().toISOString();
-      this.persist();
+      this.persist(s);
     }
   }
 
   async fail(id: string, error: string): Promise<void> {
-    const s = this.data.get(id);
-    if (s) {
+    const s = this.read(id);
+    if (s && s.status !== "completed" && s.status !== "failed") {
       s.status = "failed";
       s.result = emptyFailure(error);
       s.completedAt = new Date().toISOString();
-      this.persist();
+      this.persist(s);
     }
   }
 
@@ -202,14 +230,16 @@ export function getStore(): SubmissionStore {
   if (cached) return cached;
   const url = process.env.DATABASE_URL;
   if (url && /^postgres/.test(url)) {
-    try {
-      const sql = postgres(url, { prepare: false, max: 5 });
-      const db = drizzle(sql);
-      cached = new PgStore(db, sql);
-      return cached;
-    } catch (err) {
-      console.warn("[db] DATABASE_URL set but Postgres unavailable; using file store:", err);
-    }
+    const sql = postgres(url, { prepare: false, max: 5, connect_timeout: 10 });
+    const db = drizzle(sql);
+    cached = new PgStore(db, sql);
+    return cached;
+  }
+  if (url) throw new Error("DATABASE_URL must be a Postgres URL");
+  if (process.env.NODE_ENV === "production" && process.env.AUTOPSY_ALLOW_FILE_STORE !== "true") {
+    throw new Error(
+      "Production persistence requires DATABASE_URL, or explicit AUTOPSY_ALLOW_FILE_STORE=true on a persistent filesystem",
+    );
   }
   cached = new FileStore();
   return cached;
@@ -228,3 +258,5 @@ export function emptyFailure(error: string): ExecutionResult {
 }
 
 export { FileStore, PgStore };
+export { PostgresJobQueue, QueueCapacityError, JobConflictError } from "./job-queue";
+export type { DurableJob, JobLease } from "./job-queue";

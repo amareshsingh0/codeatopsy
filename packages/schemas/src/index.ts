@@ -79,7 +79,7 @@ export const LANGUAGE_LABEL: Record<Language, string> = {
 /* ------------------------------------------------------------------ */
 
 export const TestCase = z.object({
-  id: z.string(),
+  id: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
   input: z.string(),
   expectedOutput: z.string(),
   /** hidden tests are not shown to the student until submission */
@@ -88,7 +88,7 @@ export const TestCase = z.object({
 export type TestCase = z.infer<typeof TestCase>;
 
 export const Problem = z.object({
-  slug: z.string(),
+  slug: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
   title: z.string(),
   difficulty: z.enum(["easy", "medium", "hard"]),
   /** short one-liner for cards */
@@ -97,9 +97,9 @@ export const Problem = z.object({
   statement: z.string(),
   topics: z.array(z.string()).default([]),
   language: Language.default("cpp"),
-  timeLimitMs: z.number().int().positive().default(5000),
-  memoryLimitMb: z.number().int().positive().default(256),
-  tests: z.array(TestCase).min(1),
+  timeLimitMs: z.number().int().min(100).max(30000).default(5000),
+  memoryLimitMb: z.number().int().min(32).max(1024).default(256),
+  tests: z.array(TestCase).min(1).max(100),
   /** known-correct solution; server-side only, never sent to the browser */
   referenceSource: z.string(),
   /** the canonical buggy submission used for demos */
@@ -122,15 +122,16 @@ export const TestVerdict = z.object({
   detail: z.string().optional(),
   /** actual program stdout (truncated) — shown in the playground/output panel */
   output: z.string().optional(),
+  stderr: z.string().optional(),
   durationMs: z.number().nonnegative(),
 });
 export type TestVerdict = z.infer<typeof TestVerdict>;
 
 export const JobRequest = z.object({
-  jobId: z.string(),
+  jobId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
   problem: Problem,
   /** the code being autopsied */
-  source: z.string(),
+  source: z.string().min(1).max(200000),
   /** overrides problem.language when set */
   language: Language.optional(),
   /** run the instrumentation pipeline (default true) */
@@ -138,10 +139,25 @@ export const JobRequest = z.object({
 });
 export type JobRequest = z.infer<typeof JobRequest>;
 
+export const SubmissionRequest = z.object({
+  problemId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
+  source: z.string().min(1).max(200000),
+  input: z.string().max(100000).default(""),
+  expectedOutput: z.string().max(100000).default(""),
+  language: Language.optional(),
+});
+
 export const JobStatus = z.enum(["queued", "running", "completed", "failed"]);
 export type JobStatus = z.infer<typeof JobStatus>;
 
-export const SubmissionStatus = z.enum(["queued", "compiling", "running", "analyzing", "completed", "failed"]);
+export const SubmissionStatus = z.enum([
+  "queued",
+  "compiling",
+  "running",
+  "analyzing",
+  "completed",
+  "failed",
+]);
 export type SubmissionStatus = z.infer<typeof SubmissionStatus>;
 
 /* ------------------------------------------------------------------ */
@@ -215,8 +231,22 @@ export const ExecutionResult = z.object({
   /** the correct solution, revealed to the browser only after the run completes */
   referenceSource: z.string().optional(),
   error: z.string().optional(),
+  warnings: z.array(z.string()).optional(),
 });
 export type ExecutionResult = z.infer<typeof ExecutionResult>;
+
+export const ExecutionCallback = z.discriminatedUnion("status", [
+  z.object({
+    submissionId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
+    status: z.literal("completed"),
+    result: ExecutionResult,
+  }),
+  z.object({
+    submissionId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
+    status: z.literal("failed"),
+    error: z.string().max(4000).optional(),
+  }),
+]);
 
 /* ------------------------------------------------------------------ */
 /* Submission (stored)                                                 */
@@ -252,7 +282,7 @@ export function parseTraceJsonl(
       const parsed = JSON.parse(trimmed) as Record<string, unknown>;
       events.push(
         TraceEvent.parse({
-          seq: seq++,
+          seq,
           kind: parsed.k,
           line: parsed.l,
           fn: parsed.f,
@@ -263,6 +293,7 @@ export function parseTraceJsonl(
           depth: parsed.d ?? 0,
         }),
       );
+      seq++;
     } catch {
       dropped++;
     }

@@ -17,6 +17,15 @@ function mkTrace(side: "student" | "reference", events: TraceEvent[]): Trace {
 }
 
 describe("alignTraces", () => {
+  it("does not blame missing events when either trace was truncated", () => {
+    const student = mkTrace("student", [ev({ kind: "assign", name: "x", value: "1" })]);
+    student.meta.truncated = true;
+    const reference = mkTrace("reference", [
+      ...student.events,
+      ev({ kind: "assign", name: "x", value: "2" }),
+    ]);
+    expect(alignTraces(student, reference, "t1").divergence).toBeNull();
+  });
   it("finds a branch-outcome divergence (off-by-one loop guard)", () => {
     // student: while (left < right) — gives up one iteration early
     const student = mkTrace("student", [

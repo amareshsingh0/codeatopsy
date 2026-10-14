@@ -8,6 +8,18 @@ on:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: ci-disposable
+          POSTGRES_DB: autopsy_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -21,13 +33,46 @@ jobs:
           cache: pnpm
 
       - name: Install
-        run: pnpm install --frozen-lockfile=false
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck
         run: pnpm typecheck
 
       - name: Test (includes real g++ compile+trace pipeline)
+        env:
+          AUTOPSY_TEST_DATABASE_URL: postgres://postgres:ci-disposable@127.0.0.1:5432/autopsy_test
         run: pnpm test
+
+      - name: Apply disposable production smoke database migration
+        run: PGPASSWORD=ci-disposable psql -h 127.0.0.1 -U postgres -d autopsy_test -f packages/db/migrations/001_execution_jobs.sql
 
       - name: Build
         run: pnpm build
+
+      - name: Build isolated toolchain and test containment
+        run: |
+          docker build -f infra/sandbox.Dockerfile -t codeautopsy-sandbox:local .
+          AUTOPSY_TEST_DOCKER=true pnpm --filter @codeautopsy/execution-node exec vitest run tests/docker.integration.test.ts
+
+      - name: Production HTTP smoke checks
+        env:
+          NODE_ENV: production
+          DATABASE_URL: postgres://postgres:ci-disposable@127.0.0.1:5432/autopsy_test
+          AUTOPSY_NODE_SECRET: ci-smoke-only
+          AUTOPSY_ALLOW_LOCAL_EXECUTION: "true"
+          AUTOPSY_ALLOW_FILE_STORE: "true"
+          AUTOPSY_SANDBOX: local
+          EXECUTION_NODE_URL: http://127.0.0.1:8787
+        run: |
+          pnpm --filter @codeautopsy/execution-node start > /tmp/worker.log 2>&1 &
+          worker_pid=$!
+          pnpm --filter @codeautopsy/web start > /tmp/web.log 2>&1 &
+          web_pid=$!
+          trap 'kill "$worker_pid" "$web_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl -fsS -H 'x-autopsy-secret: ci-smoke-only' http://127.0.0.1:8787/health > /dev/null && curl -fsS http://127.0.0.1:3000/api/problems > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          pnpm smoke || { cat /tmp/worker.log /tmp/web.log; exit 1; }

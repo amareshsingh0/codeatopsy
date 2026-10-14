@@ -28,6 +28,14 @@ describe("parseTraceJsonl", () => {
   it("rejects events with unknown kinds", () => {
     expect(() => TraceEvent.parse({ seq: 0, kind: "nope", line: 1, depth: 0 })).toThrow();
   });
+  it("keeps event indices contiguous after malformed runtime events", () => {
+    const { trace, dropped } = parseTraceJsonl(
+      '{"k":"nope","l":1}\n{"k":"assign","l":2,"n":"x","v":"1"}',
+      meta,
+    );
+    expect(dropped).toBe(1);
+    expect(trace.events[0].seq).toBe(0);
+  });
 });
 
 describe("Problem schema", () => {

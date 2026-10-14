@@ -1,0 +1,181 @@
+import type { Language } from "@codeautopsy/schemas";
+export interface LearningExample {
+  slug: string;
+  title: string;
+  category: "Data" | "Structures" | "Algorithms" | "Execution";
+  question: string;
+  source: string;
+  expectedOutput: string;
+  language: Language;
+}
+const python = (
+  slug: string,
+  title: string,
+  category: LearningExample["category"],
+  question: string,
+  source: string,
+  expectedOutput: string,
+): LearningExample => ({ slug, title, category, question, source, expectedOutput, language: "python" });
+export const EXAMPLES: LearningExample[] = [
+  python(
+    "arrays",
+    "Changing a list",
+    "Data",
+    "Which box changes when we update position 1?",
+    "values = [3, 1, 4]\nvalues[1] = 9\nvalues.append(2)\nprint(values)\n",
+    "[3, 9, 4, 2]",
+  ),
+  python(
+    "binary-search",
+    "Binary search",
+    "Algorithms",
+    "How can checking the middle shrink the search?",
+    "values = [2, 4, 7, 11, 16, 21, 29]\ntarget = 16\nlo, hi = 0, len(values) - 1\nanswer = -1\nwhile lo <= hi:\n    mid = (lo + hi) // 2\n    if values[mid] == target:\n        answer = mid\n        break\n    if values[mid] < target:\n        lo = mid + 1\n    else:\n        hi = mid - 1\nprint(answer)\n",
+    "4",
+  ),
+  python(
+    "matrices",
+    "A grid of values",
+    "Data",
+    "Which row and column locate a cell?",
+    "grid = [[1, 2, 3], [4, 5, 6]]\nrow, column = 1, 2\ngrid[row][column] = 9\nprint(grid)\n",
+    "[[1, 2, 3], [4, 5, 9]]",
+  ),
+  python(
+    "strings",
+    "Reading a word",
+    "Data",
+    "How does a result grow one character at a time?",
+    "word = 'planet'\nreversed_word = ''\nfor letter in word:\n    reversed_word = letter + reversed_word\nprint(reversed_word)\n",
+    "tenalp",
+  ),
+  python(
+    "objects",
+    "Named fields",
+    "Data",
+    "How can one object hold several related facts?",
+    "player = {'name': 'Alex', 'score': 0, 'level': 1}\nplayer['score'] += 10\nplayer['level'] = 2\nprint(player['score'])\n",
+    "10",
+  ),
+  python(
+    "stack",
+    "Last in, first out",
+    "Structures",
+    "Which item leaves a stack first?",
+    "stack = []\nstack.append('book')\nstack.append('pencil')\nstack.append('ruler')\nremoved = stack.pop()\nprint(removed)\n",
+    "ruler",
+  ),
+  python(
+    "queue",
+    "First in, first out",
+    "Structures",
+    "Who is served first in a waiting line?",
+    "queue = ['Alex', 'Sam', 'Lee']\nserved = queue.pop(0)\nqueue.append('Jo')\nprint(served)\n",
+    "Alex",
+  ),
+  python(
+    "linked-list",
+    "Connected nodes",
+    "Structures",
+    "How does each node point to the next?",
+    "head = {'value': 1, 'next': {'value': 2, 'next': None}}\nhead['next']['next'] = {'value': 3, 'next': None}\ncurrent = head\nvalues = []\nwhile current is not None:\n    values.append(current['value'])\n    current = current['next']\nprint(values)\n",
+    "[1, 2, 3]",
+  ),
+  python(
+    "trees",
+    "Walking a tree",
+    "Structures",
+    "How does a function visit left and right children?",
+    "tree = {'value': 4, 'left': {'value': 2, 'left': None, 'right': None}, 'right': {'value': 7, 'left': None, 'right': None}}\nvisited = []\ndef visit(node):\n    if node is None:\n        return\n    visit(node['left'])\n    visited.append(node['value'])\n    visit(node['right'])\nvisit(tree)\nprint(visited)\n",
+    "[2, 4, 7]",
+  ),
+  python(
+    "graphs",
+    "Exploring connections",
+    "Structures",
+    "How can we visit connected places without getting stuck in a cycle?",
+    "graph = {'A': ['B', 'C'], 'B': ['D'], 'C': ['D'], 'D': []}\nqueue = ['A']\nvisited = []\nwhile queue:\n    vertex = queue.pop(0)\n    if vertex in visited:\n        continue\n    visited.append(vertex)\n    queue.extend(graph[vertex])\nprint(visited)\n",
+    "['A', 'B', 'C', 'D']",
+  ),
+  python(
+    "recursion",
+    "A function calling itself",
+    "Execution",
+    "What does each call remember while it waits?",
+    "def factorial(n):\n    if n <= 1:\n        return 1\n    smaller = factorial(n - 1)\n    result = n * smaller\n    return result\nanswer = factorial(4)\nprint(answer)\n",
+    "24",
+  ),
+  python(
+    "dynamic-programming",
+    "Remembering smaller answers",
+    "Algorithms",
+    "How does each grid cell reuse answers already calculated?",
+    "rows, columns = 3, 4\nways = [[0] * columns for _ in range(rows)]\nfor row in range(rows):\n    for column in range(columns):\n        if row == 0 or column == 0:\n            ways[row][column] = 1\n        else:\n            ways[row][column] = ways[row - 1][column] + ways[row][column - 1]\nprint(ways[-1][-1])\n",
+    "10",
+  ),
+  python(
+    "sorting",
+    "Putting values in order",
+    "Algorithms",
+    "What changes when neighboring values swap?",
+    "values = [4, 1, 3, 2]\nfor end in range(len(values) - 1, 0, -1):\n    for position in range(end):\n        if values[position] > values[position + 1]:\n            values[position], values[position + 1] = values[position + 1], values[position]\nprint(values)\n",
+    "[1, 2, 3, 4]",
+  ),
+  python(
+    "two-pointers",
+    "Two moving positions",
+    "Algorithms",
+    "Which end should move to reach the target sum?",
+    "values = [1, 3, 4, 6, 8]\nleft, right = 0, len(values) - 1\ntarget = 9\nwhile left < right:\n    total = values[left] + values[right]\n    if total == target:\n        break\n    if total < target:\n        left += 1\n    else:\n        right -= 1\nprint(left, right)\n",
+    "0 4",
+  ),
+  python(
+    "sliding-window",
+    "A moving window",
+    "Algorithms",
+    "How can we update a group total without adding everything again?",
+    "values = [2, 1, 5, 1, 3, 2]\nwidth = 3\ntotal = sum(values[:width])\nbest = total\nfor end in range(width, len(values)):\n    start = end - width\n    total += values[end] - values[start]\n    best = max(best, total)\nprint(best)\n",
+    "9",
+  ),
+  python(
+    "heap",
+    "The smallest item first",
+    "Structures",
+    "How can a heap keep the next priority ready?",
+    "import heapq\nheap = [7, 2, 5, 1]\nheapq.heapify(heap)\nsmallest = heapq.heappop(heap)\nheapq.heappush(heap, 3)\nprint(smallest)\n",
+    "1",
+  ),
+  python(
+    "branches",
+    "Making a decision",
+    "Execution",
+    "How does a condition choose which instructions run?",
+    "temperature = 18\nif temperature < 20:\n    message = 'Bring a jacket'\nelse:\n    message = 'Enjoy the sunshine'\nprint(message)\n",
+    "Bring a jacket",
+  ),
+  python(
+    "timeouts",
+    "A loop that can finish",
+    "Execution",
+    "What brings a loop closer to its stopping condition?",
+    "remaining = 4\nsteps = 0\nwhile remaining > 0:\n    remaining -= 1\n    steps += 1\nprint(steps)\n# Removing the decrement creates a loop that does not finish.\n",
+    "4",
+  ),
+  python(
+    "diagnostics",
+    "Investigating a failure",
+    "Execution",
+    "Why does this program stop before producing an answer?",
+    "text = 'not a number'\nnumber = int(text)\nprint(number)\n# Replace the text with '12', run again, and compare the diagnostic.\n",
+    "",
+  ),
+  python(
+    "divergence",
+    "Testing an edge case",
+    "Execution",
+    "Why is starting at zero wrong for an all-negative list?",
+    "values = [-5, -2, -9]\nbest = 0\nfor value in values:\n    best = max(best, value)\nprint(best)\n# Try initializing best with the first item instead.\n",
+    "-2",
+  ),
+];
+export const getExample = (slug?: string) => EXAMPLES.find((example) => example.slug === slug);

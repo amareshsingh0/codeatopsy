@@ -1,11 +1,11 @@
 /**
  * The full autopsy pipeline for one submission, dispatched by language:
- *   cpp/c   — g++ compile → verdicts → instrument both sides → traces → divergence
+ *   cpp/c   — native compiler → verdicts → instrument both sides → traces → divergence
  *   python  — interpreter run → verdicts → sys.settrace runner → trace
  *   javascript — node run → verdicts → acorn-instrumented trace run
  *   java    — single-file java run → verdicts (no trace yet)
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, lstatSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -61,15 +61,23 @@ function firstMismatch(actual: string, expected: string): string | undefined {
   return undefined;
 }
 
-function judgeRun(run: RunResult, expectedOutput: string): { status: TestVerdict["status"]; detail?: string } {
+function judgeRun(
+  run: RunResult,
+  expectedOutput: string,
+  allowUncheckedOutput = false,
+): { status: TestVerdict["status"]; detail?: string } {
   if (run.timedOut) return { status: "timeout" };
+  if (run.outputLimitExceeded)
+    return { status: "runtime_error", detail: "Program exceeded the 256 KB output limit" };
   if (run.exitCode !== 0) {
     return {
       status: "runtime_error",
-      detail: run.stderr.split("\n").filter(Boolean).slice(-2).join(" | ").slice(0, 300) || `exit code ${run.exitCode}`,
+      detail:
+        run.stderr.split("\n").filter(Boolean).slice(-2).join(" | ").slice(0, 300) ||
+        `exit code ${run.exitCode}`,
     };
   }
-  if (expectedOutput.trim() === "") {
+  if (expectedOutput === "" && allowUncheckedOutput) {
     // playground mode: no expected output — running cleanly is the pass condition
     return { status: "accepted" };
   }
@@ -105,7 +113,11 @@ export async function processJob(job: JobRequest): Promise<ExecutionResult> {
         return await runCppPipeline(job, sandbox);
     }
   } finally {
-    sandbox.cleanup();
+    try {
+      sandbox.cleanup();
+    } catch (err) {
+      console.error("[pipeline] cleanup failed:", err);
+    }
   }
 }
 
@@ -115,7 +127,10 @@ export async function processJob(job: JobRequest): Promise<ExecutionResult> {
 
 function readTraceFile(sandbox: Sandbox, file: string, meta: Trace["meta"]): Trace | null {
   try {
-    const raw = readFileSync(join(workdirOf(sandbox), file), "utf8");
+    const path = sandbox.kind === "docker" ? join(sandbox.dir, "traces", file) : join(sandbox.dir, file);
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024 * 1024) return null;
+    const raw = readFileSync(path, "utf8");
     let truncated = false;
     const filtered: string[] = [];
     for (const l of raw.split("\n")) {
@@ -132,7 +147,7 @@ function readTraceFile(sandbox: Sandbox, file: string, meta: Trace["meta"]): Tra
       filtered.push(t);
     }
     const { trace } = parseTraceJsonl(filtered.join("\n"), { ...meta, truncated });
-    return trace;
+    return trace.events.length ? trace : null;
   } catch {
     return null;
   }
@@ -157,12 +172,15 @@ async function finish(
   result.report = report;
   result.language = job.language ?? job.problem.language ?? "cpp";
   result.referenceSource = job.problem.referenceSource;
+  if (job.autopsy && Object.keys(result.studentTraces).length === 0 && !result.warnings?.length) {
+    (result.warnings ??= []).push(
+      result.language === "java"
+        ? "Java execution is supported; Java tracing is not implemented yet."
+        : "No trace was collected for this run. Verdicts and output remain available.",
+    );
+  }
   result.ok = true;
   return result;
-}
-
-function workdirOf(sandbox: Sandbox): string {
-  return (sandbox as unknown as { dir: string }).dir;
 }
 
 /* ------------------------------------------------------------------ */
@@ -176,14 +194,22 @@ async function runCppPipeline(job: JobRequest, sandbox: Sandbox): Promise<Execut
   const studentBin = `student_${job.jobId}`;
   const refBin = `reference_${job.jobId}`;
 
-  const studentCompile = await sandbox.compile("student", job.source, [], studentBin);
+  const nativeLanguage = (job.language ?? problem.language) === "c" ? "c" : "cpp";
+  result.language = nativeLanguage;
+  const studentCompile = await sandbox.compile("student", job.source, [], studentBin, nativeLanguage);
   if (!studentCompile.ok) {
     result.compileError = { side: "student", stderr: studentCompile.stderr.slice(-4000) };
     result.report = (await buildReport(result, undefined, undefined, null, problem.bugHint)).report;
     return result;
   }
   if (hasReference) {
-    const refCompile = await sandbox.compile("reference", problem.referenceSource, [], refBin);
+    const refCompile = await sandbox.compile(
+      "reference",
+      problem.referenceSource,
+      [],
+      refBin,
+      nativeLanguage,
+    );
     if (!refCompile.ok) {
       result.compileError = { side: "reference", stderr: refCompile.stderr.slice(-4000) };
       result.report = (await buildReport(result, undefined, undefined, null, problem.bugHint)).report;
@@ -197,13 +223,14 @@ async function runCppPipeline(job: JobRequest, sandbox: Sandbox): Promise<Execut
       timeLimitMs: problem.timeLimitMs,
       memoryLimitMb: problem.memoryLimitMb,
     });
-    const { status, detail } = judgeRun(run, test.expectedOutput);
+    const { status, detail } = judgeRun(run, test.expectedOutput, !hasReference);
     result.verdicts.push({
       testId: test.id,
       status,
       exitCode: run.exitCode,
       detail,
       output: run.stdout.slice(0, 4000),
+      stderr: run.stderr.slice(-4000) || undefined,
       durationMs: run.durationMs,
     });
   }
@@ -212,6 +239,8 @@ async function runCppPipeline(job: JobRequest, sandbox: Sandbox): Promise<Execut
   if (job.autopsy && (failedVerdicts.length > 0 || !hasReference)) {
     try {
       const studentInst = instrument(job.source);
+      if (studentInst.notes.length)
+        (result.warnings ??= []).push(...studentInst.notes.map((note) => `Trace coverage: ${note}`));
       const refInst = hasReference ? instrument(problem.referenceSource) : null;
       const studentTraceBin = `student_traced_${job.jobId}`;
       const refTraceBin = `reference_traced_${job.jobId}`;
@@ -223,9 +252,11 @@ async function runCppPipeline(job: JobRequest, sandbox: Sandbox): Promise<Execut
           : null;
 
       if (stc.ok && (rtc === null || rtc.ok)) {
-        for (const test of problem.tests) {
+        const selectedTests = hasReference
+          ? problem.tests.filter((t) => t.id === failedVerdicts[0]?.testId)
+          : problem.tests;
+        for (const test of selectedTests) {
           const verdict = result.verdicts.find((v) => v.testId === test.id)!;
-          if (verdict.status === "timeout") continue;
           const studentTrace = await traceCppRun(sandbox, studentTraceBin, test, "student", problem);
           if (studentTrace) result.studentTraces[test.id] = studentTrace;
           if (refInst !== null && rtc !== null) {
@@ -233,13 +264,23 @@ async function runCppPipeline(job: JobRequest, sandbox: Sandbox): Promise<Execut
             if (refTrace) result.referenceTraces[test.id] = refTrace;
           }
         }
+      } else {
+        (result.warnings ??= []).push(
+          `Trace compilation failed${nativeLanguage === "c" ? " (C tracing currently requires C++-compatible source)" : ""}: ${(stc.ok ? rtc?.stderr : stc.stderr)?.slice(-1500)}`,
+        );
       }
     } catch (err) {
-      console.error("[pipeline] autopsy stage failed:", err);
+      (result.warnings ??= []).push(
+        `Trace instrumentation failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
-  return finish(result, job, result.verdicts.find((v) => v.status !== "accepted"));
+  return finish(
+    result,
+    job,
+    result.verdicts.find((v) => v.status !== "accepted"),
+  );
 }
 
 async function traceCppRun(
@@ -256,13 +297,12 @@ async function traceCppRun(
     timeLimitMs: problem.timeLimitMs + 1000,
     memoryLimitMb: problem.memoryLimitMb,
     env: {
-      AUTOPSY_TRACE_PATH: join(workdirOf(sandbox), traceFile),
-      AUTOPSY_MAX_EVENTS: "200000",
+      AUTOPSY_TRACE_PATH: sandbox.tracePath(traceFile),
+      AUTOPSY_MAX_EVENTS: "20000",
       AUTOPSY_TIME_BUDGET_MS: String(timeBudget),
     },
   });
-  if (run.timedOut) return null;
-  return readTraceFile(sandbox, traceFile, {
+  const trace = readTraceFile(sandbox, traceFile, {
     problemId: problem.slug,
     testId: test.id,
     side,
@@ -270,14 +310,18 @@ async function traceCppRun(
     durationMs: run.durationMs,
     truncated: false,
   });
+  if (trace && run.timedOut) trace.meta.truncated = true;
+  return trace;
 }
 
 /* ------------------------------------------------------------------ */
 /* Python                                                              */
 /* ------------------------------------------------------------------ */
 
-function pythonBin(): string {
-  return process.env.AUTOPSY_PYTHON || "python";
+function pythonBin(sandbox: Sandbox): string {
+  return sandbox.kind === "docker"
+    ? "python3"
+    : process.env.AUTOPSY_PYTHON || (process.platform === "win32" ? "python" : "python3");
 }
 
 async function runPythonPipeline(job: JobRequest, sandbox: Sandbox): Promise<ExecutionResult> {
@@ -290,30 +334,35 @@ async function runPythonPipeline(job: JobRequest, sandbox: Sandbox): Promise<Exe
   try {
     sandbox.writeFile("autopsy_runner.py", readFileSync(PYTHON_RUNNER, "utf8"));
   } catch (err) {
-    console.error("[pipeline] python runner asset missing:", err);
+    (result.warnings ??= []).push(
+      `Python trace runner unavailable: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 
   for (const test of problem.tests) {
-    const run = await sandbox.exec([pythonBin(), "main.py"], {
+    const run = await sandbox.exec([pythonBin(sandbox), "main.py"], {
       input: test.input,
       timeoutMs: problem.timeLimitMs,
+      memoryLimitMb: problem.memoryLimitMb,
     });
-    const { status, detail } = judgeRun(run, test.expectedOutput);
+    const { status, detail } = judgeRun(run, test.expectedOutput, !hasReference);
     result.verdicts.push({
       testId: test.id,
       status,
       exitCode: run.exitCode,
       detail,
       output: run.stdout.slice(0, 4000),
+      stderr: run.stderr.slice(-4000) || undefined,
       durationMs: run.durationMs,
     });
   }
 
   const failedVerdicts = result.verdicts.filter((v) => v.status !== "accepted");
   if (job.autopsy && (failedVerdicts.length > 0 || !hasReference)) {
-    for (const test of problem.tests) {
+    for (const test of hasReference
+      ? problem.tests.filter((t) => t.id === failedVerdicts[0]?.testId)
+      : problem.tests) {
       const verdict = result.verdicts.find((v) => v.testId === test.id)!;
-      if (verdict.status === "timeout") continue;
       const studentTrace = await tracePythonRun(sandbox, "main.py", test, "student", problem);
       if (studentTrace) result.studentTraces[test.id] = studentTrace;
       if (hasReference) {
@@ -323,7 +372,11 @@ async function runPythonPipeline(job: JobRequest, sandbox: Sandbox): Promise<Exe
     }
   }
 
-  return finish(result, job, result.verdicts.find((v) => v.status !== "accepted"));
+  return finish(
+    result,
+    job,
+    result.verdicts.find((v) => v.status !== "accepted"),
+  );
 }
 
 async function tracePythonRun(
@@ -334,18 +387,18 @@ async function tracePythonRun(
   problem: JobRequest["problem"],
 ): Promise<Trace | null> {
   const traceFile = `trace_${side}_${test.id}.jsonl`;
-  const run = await sandbox.exec([pythonBin(), "autopsy_runner.py", script], {
+  const run = await sandbox.exec([pythonBin(sandbox), "autopsy_runner.py", script], {
     input: test.input,
     timeoutMs: problem.timeLimitMs + 3000, // tracing overhead
+    memoryLimitMb: problem.memoryLimitMb,
     env: {
-      AUTOPSY_TRACE_PATH: join(workdirOf(sandbox), traceFile),
-      AUTOPSY_MAX_EVENTS: "200000",
+      AUTOPSY_TRACE_PATH: sandbox.tracePath(traceFile),
+      AUTOPSY_MAX_EVENTS: "20000",
       AUTOPSY_TIME_BUDGET_MS: String(Math.max(500, problem.timeLimitMs - 400)),
       PYTHONIOENCODING: "utf-8",
     },
   });
-  if (run.timedOut) return null;
-  return readTraceFile(sandbox, traceFile, {
+  const trace = readTraceFile(sandbox, traceFile, {
     problemId: problem.slug,
     testId: test.id,
     side,
@@ -353,14 +406,16 @@ async function tracePythonRun(
     durationMs: run.durationMs,
     truncated: false,
   });
+  if (trace && run.timedOut) trace.meta.truncated = true;
+  return trace;
 }
 
 /* ------------------------------------------------------------------ */
 /* JavaScript (Node)                                                   */
 /* ------------------------------------------------------------------ */
 
-function nodeBin(): string {
-  return process.env.AUTOPSY_NODE || "node";
+function nodeBin(sandbox: Sandbox): string {
+  return sandbox.kind === "docker" ? "node" : process.env.AUTOPSY_NODE || process.execPath;
 }
 
 async function runJsPipeline(job: JobRequest, sandbox: Sandbox): Promise<ExecutionResult> {
@@ -368,21 +423,37 @@ async function runJsPipeline(job: JobRequest, sandbox: Sandbox): Promise<Executi
   const result = emptyResult();
   const hasReference = problem.referenceSource.trim().length > 0;
   result.language = "javascript";
-  sandbox.writeFile("main.js", job.source);
-  if (hasReference) sandbox.writeFile("reference.js", problem.referenceSource);
+  let studentInst: ReturnType<typeof instrumentJs> | undefined;
+  let refInst: ReturnType<typeof instrumentJs> | undefined;
+  try {
+    studentInst = instrumentJs(job.source);
+  } catch {
+    /* runtime reports syntax errors */
+  }
+  if (hasReference) {
+    try {
+      refInst = instrumentJs(problem.referenceSource);
+    } catch {
+      /* handled below */
+    }
+  }
+  const studentFile = studentInst?.moduleKind === "esm" ? "main.mjs" : "main.cjs";
+  sandbox.writeFile(studentFile, job.source);
 
   for (const test of problem.tests) {
-    const run = await sandbox.exec([nodeBin(), "main.js"], {
+    const run = await sandbox.exec([nodeBin(sandbox), studentFile], {
       input: test.input,
       timeoutMs: problem.timeLimitMs,
+      memoryLimitMb: problem.memoryLimitMb,
     });
-    const { status, detail } = judgeRun(run, test.expectedOutput);
+    const { status, detail } = judgeRun(run, test.expectedOutput, !hasReference);
     result.verdicts.push({
       testId: test.id,
       status,
       exitCode: run.exitCode,
       detail,
       output: run.stdout.slice(0, 4000),
+      stderr: run.stderr.slice(-4000) || undefined,
       durationMs: run.durationMs,
     });
   }
@@ -390,16 +461,21 @@ async function runJsPipeline(job: JobRequest, sandbox: Sandbox): Promise<Executi
   const failedVerdicts = result.verdicts.filter((v) => v.status !== "accepted");
   if (job.autopsy && (failedVerdicts.length > 0 || !hasReference)) {
     try {
-      const studentInst = instrumentJs(job.source);
+      if (!studentInst) throw new Error("JavaScript could not be parsed for tracing");
       const studentFile = studentInst.moduleKind === "esm" ? "main.traced.mjs" : "main.traced.cjs";
       sandbox.writeFile(studentFile, studentInst.code);
-      const refInst = hasReference ? instrumentJs(problem.referenceSource) : null;
-      const refFile = refInst ? (refInst.moduleKind === "esm" ? "reference.traced.mjs" : "reference.traced.cjs") : null;
+      if (hasReference && !refInst) throw new Error("Reference JavaScript could not be parsed for tracing");
+      const refFile = refInst
+        ? refInst.moduleKind === "esm"
+          ? "reference.traced.mjs"
+          : "reference.traced.cjs"
+        : null;
       if (refInst && refFile) sandbox.writeFile(refFile, refInst.code);
 
-      for (const test of problem.tests) {
+      for (const test of hasReference
+        ? problem.tests.filter((t) => t.id === failedVerdicts[0]?.testId)
+        : problem.tests) {
         const verdict = result.verdicts.find((v) => v.testId === test.id)!;
-        if (verdict.status === "timeout") continue;
         const studentTrace = await traceJsRun(sandbox, studentFile, test, "student", problem);
         if (studentTrace) result.studentTraces[test.id] = studentTrace;
         if (refFile) {
@@ -408,11 +484,17 @@ async function runJsPipeline(job: JobRequest, sandbox: Sandbox): Promise<Executi
         }
       }
     } catch (err) {
-      console.error("[pipeline] js autopsy stage failed:", err);
+      (result.warnings ??= []).push(
+        `JavaScript tracing failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
-  return finish(result, job, result.verdicts.find((v) => v.status !== "accepted"));
+  return finish(
+    result,
+    job,
+    result.verdicts.find((v) => v.status !== "accepted"),
+  );
 }
 
 async function traceJsRun(
@@ -423,17 +505,17 @@ async function traceJsRun(
   problem: JobRequest["problem"],
 ): Promise<Trace | null> {
   const traceFile = `trace_${side}_${test.id}.jsonl`;
-  const run = await sandbox.exec([nodeBin(), file], {
+  const run = await sandbox.exec([nodeBin(sandbox), file], {
     input: test.input,
     timeoutMs: problem.timeLimitMs + 2000,
+    memoryLimitMb: problem.memoryLimitMb,
     env: {
-      AUTOPSY_TRACE_PATH: join(workdirOf(sandbox), traceFile),
-      AUTOPSY_MAX_EVENTS: "200000",
+      AUTOPSY_TRACE_PATH: sandbox.tracePath(traceFile),
+      AUTOPSY_MAX_EVENTS: "20000",
       AUTOPSY_TIME_BUDGET_MS: String(Math.max(500, problem.timeLimitMs - 400)),
     },
   });
-  if (run.timedOut) return null;
-  return readTraceFile(sandbox, traceFile, {
+  const trace = readTraceFile(sandbox, traceFile, {
     problemId: problem.slug,
     testId: test.id,
     side,
@@ -441,6 +523,8 @@ async function traceJsRun(
     durationMs: run.durationMs,
     truncated: false,
   });
+  if (trace && run.timedOut) trace.meta.truncated = true;
+  return trace;
 }
 
 /* ------------------------------------------------------------------ */
@@ -457,22 +541,31 @@ async function runJavaPipeline(job: JobRequest, sandbox: Sandbox): Promise<Execu
   sandbox.writeFile(file, job.source);
 
   for (const test of problem.tests) {
-    const run = await sandbox.exec([process.env.AUTOPSY_JAVA || "java", file], {
-      input: test.input,
-      timeoutMs: problem.timeLimitMs + 2000, // JVM startup
-    });
-    const { status, detail } = judgeRun(run, test.expectedOutput);
+    const run = await sandbox.exec(
+      [sandbox.kind === "docker" ? "java" : process.env.AUTOPSY_JAVA || "java", file],
+      {
+        input: test.input,
+        timeoutMs: problem.timeLimitMs + 2000, // JVM startup
+        memoryLimitMb: problem.memoryLimitMb,
+      },
+    );
+    const { status, detail } = judgeRun(run, test.expectedOutput, !problem.referenceSource.trim());
     result.verdicts.push({
       testId: test.id,
       status,
       exitCode: run.exitCode,
       detail,
       output: run.stdout.slice(0, 4000),
+      stderr: run.stderr.slice(-4000) || undefined,
       durationMs: run.durationMs,
     });
   }
 
-  return finish(result, job, result.verdicts.find((v) => v.status !== "accepted"));
+  return finish(
+    result,
+    job,
+    result.verdicts.find((v) => v.status !== "accepted"),
+  );
 }
 
 export { normalizeOutput, firstMismatch };

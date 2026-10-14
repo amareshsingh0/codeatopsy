@@ -35,6 +35,44 @@ function mkProblem(over: Partial<Problem>): Problem {
 }
 
 describe.runIf(hasPython)("pipeline — python", () => {
+  it("captures custom node fields without invoking properties or truncating valid small structure JSON", async () => {
+    const source =
+      "class Node:\n    def __init__(self, value):\n        self.value = value\n        self.next = None\n    @property\n    def dangerous(self):\n        raise RuntimeError('getter invoked')\nhead = Node(1)\nhead.next = Node(2)\nprint(head.next.value)\n";
+    const result = await processJob({
+      jobId: "py-nodes",
+      problem: mkProblem({
+        language: "python",
+        tests: [{ id: "run-1", input: "", expectedOutput: "2", hidden: false }],
+      }),
+      source,
+      autopsy: true,
+    });
+    expect(result.verdicts[0].status).toBe("accepted");
+    const values = result.studentTraces["run-1"].events
+      .filter((event) => event.name === "head")
+      .map((event) => JSON.parse(event.value!));
+    expect(values).toContainEqual({ value: 1, next: { value: 2, next: null } });
+  });
+  it("captures in-place mutation on the executed source line", async () => {
+    const source = "a = [1]\na.append(2)\na[0] = 9\nprint(a)\n";
+    const result = await processJob({
+      jobId: "py-mutation",
+      problem: mkProblem({
+        language: "python",
+        tests: [{ id: "run-1", input: "", expectedOutput: "[9, 2]", hidden: false }],
+      }),
+      source,
+      autopsy: true,
+    });
+    expect(result.verdicts[0].status).toBe("accepted");
+    const events = result.studentTraces["run-1"].events.filter((e) => e.kind === "assign" && e.name === "a");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "[1, 2]", line: 2 }),
+        expect.objectContaining({ value: "[9, 2]", line: 3 }),
+      ]),
+    );
+  });
   it("runs python code and produces a trace via sys.settrace", async () => {
     const source = `n = int(input())
 a = [int(x) for x in input().split()]
@@ -47,7 +85,13 @@ for x in a:
 print(best)
 `;
     const problem = mkProblem({ language: "python" });
-    const result = await processJob({ jobId: "py-job-1", problem, source, language: "python", autopsy: true });
+    const result = await processJob({
+      jobId: "py-job-1",
+      problem,
+      source,
+      language: "python",
+      autopsy: true,
+    });
 
     expect(result.ok).toBe(true);
     expect(result.verdicts[0].status).toBe("accepted");
@@ -61,6 +105,35 @@ print(best)
 });
 
 describe.runIf(hasNode)("pipeline — javascript", () => {
+  it("checks empty expected output for reference problems instead of accepting all output", async () => {
+    const source = 'console.log("unexpected");';
+    const result = await processJob({
+      jobId: "js-empty-output",
+      problem: mkProblem({
+        language: "javascript",
+        referenceSource: 'console.log("")',
+        tests: [{ id: "run-1", input: "", expectedOutput: "", hidden: false }],
+      }),
+      source,
+      autopsy: true,
+    });
+    expect(result.verdicts[0].status).toBe("wrong_answer");
+  });
+  it("runs module syntax and synchronous stdin on the verdict and trace paths", async () => {
+    const source =
+      '/* module */ import fs from "node:fs"; const value = await Promise.resolve(fs.readFileSync(0,"utf8").trim()); console.log(value);';
+    const result = await processJob({
+      jobId: "js-esm",
+      problem: mkProblem({
+        language: "javascript",
+        tests: [{ id: "run-1", input: "module input\n", expectedOutput: "module input", hidden: false }],
+      }),
+      source,
+      autopsy: true,
+    });
+    expect(result.verdicts[0].status).toBe("accepted");
+    expect(result.studentTraces["run-1"].events.length).toBeGreaterThan(0);
+  });
   it("runs JS code and produces a trace via the acorn instrumenter", async () => {
     const NL = String.fromCharCode(10);
     // portable stdin pattern (readFileSync(0) is unreliable on Windows); no escape sequences
@@ -68,21 +141,27 @@ describe.runIf(hasNode)("pipeline — javascript", () => {
       'let input = "";',
       'process.stdin.on("data", (d) => (input += d));',
       'process.stdin.on("end", () => {',
-      '  const lines = input.split(String.fromCharCode(10));',
-      '  const n = parseInt(lines[0]);',
+      "  const lines = input.split(String.fromCharCode(10));",
+      "  const n = parseInt(lines[0]);",
       '  const a = lines[1].split(" ").map(Number);',
-      '',
-      '  let best = 0;',
-      '  let cur = 0;',
-      '  for (let i = 0; i < n; i++) {',
-      '    cur = Math.max(cur + a[i], a[i]);',
-      '    best = Math.max(best, cur);',
-      '  }',
-      '  console.log(best);',
-      '});',
+      "",
+      "  let best = 0;",
+      "  let cur = 0;",
+      "  for (let i = 0; i < n; i++) {",
+      "    cur = Math.max(cur + a[i], a[i]);",
+      "    best = Math.max(best, cur);",
+      "  }",
+      "  console.log(best);",
+      "});",
     ].join(NL);
     const problem = mkProblem({ language: "javascript" });
-    const result = await processJob({ jobId: "js-job-1", problem, source, language: "javascript", autopsy: true });
+    const result = await processJob({
+      jobId: "js-job-1",
+      problem,
+      source,
+      language: "javascript",
+      autopsy: true,
+    });
 
     expect(result.ok).toBe(true);
     expect(result.verdicts[0].status).toBe("accepted");
@@ -113,7 +192,13 @@ public class Main {
 }
 `;
     const problem = mkProblem({ language: "java" });
-    const result = await processJob({ jobId: "java-job-1", problem, source, language: "java", autopsy: true });
+    const result = await processJob({
+      jobId: "java-job-1",
+      problem,
+      source,
+      language: "java",
+      autopsy: true,
+    });
 
     expect(result.ok).toBe(true);
     expect(result.verdicts[0].status).toBe("accepted");

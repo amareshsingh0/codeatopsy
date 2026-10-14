@@ -18,34 +18,39 @@ export interface JsInstrumentResult {
 interface Insertion {
   pos: number;
   text: string;
+  priority: number;
 }
 
 const MAX_PROBES = 4000;
 
 const RUNTIME_CJS = `"__autopsy";const __FS=require("node:fs");let __BUF="",__N=0,__DIS=false;const __T0=Date.now(),__MAX=+process.env.AUTOPSY_MAX_EVENTS||200000,__TB=+process.env.AUTOPSY_TIME_BUDGET_MS||4000;let __DEP=0;
-function __W(o){if(__DIS||__N>=__MAX){return}if(++__N%1024===0&&Date.now()-__T0>__TB){__DIS=true}try{__BUF+=JSON.stringify(o)+"\\n"}catch(e){}}
-function __FL(){try{if(process.env.AUTOPSY_TRACE_PATH){__FS.appendFileSync(process.env.AUTOPSY_TRACE_PATH,__BUF+"{\\"_autopsy_truncated\\":"+(!!__DIS)+"}\\n")}else{process.stderr.write(__BUF)}}catch(e){}}process.on("exit",__FL);
-function __esc(s){return s==null?"":String(s)}
-function __A(n,l,v){__W({k:"assign",l,f:"",d:__DEP,n:__esc(n),v:__esc(typeof v==="object"?JSON.stringify(v):v)})}
+function __W(o){if(__DIS)return;if(__N>=__MAX||Date.now()-__T0>__TB){__DIS=true;return}__N++;try{__BUF+=JSON.stringify(o)+"\\n";if(__BUF.length>65536)__FL(false)}catch(e){}}
+function __FL(final=false){try{if(process.env.AUTOPSY_TRACE_PATH){__FS.appendFileSync(process.env.AUTOPSY_TRACE_PATH,__BUF+(final?JSON.stringify({_autopsy_truncated:!!__DIS})+"\\n":""))}else{process.stderr.write(__BUF)}}catch(e){}__BUF=""}process.on("exit",()=>__FL(true));
+function __esc(s){try{return String(s).slice(0,200)}catch(e){return "<unprintable>"}}
+function __SN(v,seen=new WeakSet(),depth=0){if(v===null)return null;const t=typeof v;if(t==="bigint")return String(v);if(t==="function")return "<function>";if(t==="string")return v.slice(0,200);if(t!=="object")return v;if(depth>=6)return "<depth limit>";if(seen.has(v))return "<circular>";seen.add(v);const out=Array.isArray(v)?[]:Object.create(null);for(const key of Object.keys(v).slice(0,50)){const d=Object.getOwnPropertyDescriptor(v,key);if(d)out[key]="value" in d?__SN(d.value,seen,depth+1):"<getter>"}return out}
+function __VAL(v){try{const s=JSON.stringify(__SN(v))??String(v);return s.length<=8192?s:JSON.stringify("<snapshot exceeds 8192 character limit>")}catch(e){return "<unprintable>"}}
+function __A(n,l,v){__W({k:"assign",l,f:"",d:__DEP,n:__esc(n),v:__VAL(v)})}
 function __AV(n,l,v){__A(n,l,v);return v}
 function __B(l,c,t){__W({k:"branch",l,f:"",d:__DEP,c:__esc(c),v:"",t:!!t});return !!t}
-function __S(l,c,v){__W({k:"branch",l,f:"",d:__DEP,c:__esc(c),v:__esc(typeof v==="object"?JSON.stringify(v):v),t:true});return v}
+function __S(l,c,v){__W({k:"branch",l,f:"",d:__DEP,c:__esc(c),v:__VAL(v),t:true});return v}
 function __C(f,l){__DEP++;__W({k:"call",l,f:__esc(f),d:__DEP})}
-function __R(f,l,v){__W({k:"return",l,f:__esc(f),d:__DEP,v:__esc(typeof v==="object"?JSON.stringify(v):v)});if(__DEP>0)__DEP--;return v}
+function __R(f,l,v){__W({k:"return",l,f:__esc(f),d:__DEP,v:__VAL(v)});if(__DEP>0)__DEP--;return v}
 function __RV(f,l){__W({k:"returnvoid",l,f:__esc(f),d:__DEP});if(__DEP>0)__DEP--}
 `;
 
 const RUNTIME_ESM = `import __FS from "node:fs";
 let __BUF="",__N=0,__DIS=false;const __T0=Date.now(),__MAX=+process.env.AUTOPSY_MAX_EVENTS||200000,__TB=+process.env.AUTOPSY_TIME_BUDGET_MS||4000;let __DEP=0;
-function __W(o){if(__DIS||__N>=__MAX){return}if(++__N%1024===0&&Date.now()-__T0>__TB){__DIS=true}try{__BUF+=JSON.stringify(o)+"\\n"}catch(e){}}
-function __FL(){try{if(process.env.AUTOPSY_TRACE_PATH){__FS.appendFileSync(process.env.AUTOPSY_TRACE_PATH,__BUF+"{\\"_autopsy_truncated\\":"+(!!__DIS)+"}\\n")}else{process.stderr.write(__BUF)}}catch(e){}}process.on("exit",__FL);
-function __esc(s){return s==null?"":String(s)}
-function __A(n,l,v){__W({k:"assign",l,f:"",d:__DEP,n:__esc(n),v:__esc(typeof v==="object"?JSON.stringify(v):v)})}
+function __W(o){if(__DIS)return;if(__N>=__MAX||Date.now()-__T0>__TB){__DIS=true;return}__N++;try{__BUF+=JSON.stringify(o)+"\\n";if(__BUF.length>65536)__FL(false)}catch(e){}}
+function __FL(final=false){try{if(process.env.AUTOPSY_TRACE_PATH){__FS.appendFileSync(process.env.AUTOPSY_TRACE_PATH,__BUF+(final?JSON.stringify({_autopsy_truncated:!!__DIS})+"\\n":""))}else{process.stderr.write(__BUF)}}catch(e){}__BUF=""}process.on("exit",()=>__FL(true));
+function __esc(s){try{return String(s).slice(0,200)}catch(e){return "<unprintable>"}}
+function __SN(v,seen=new WeakSet(),depth=0){if(v===null)return null;const t=typeof v;if(t==="bigint")return String(v);if(t==="function")return "<function>";if(t==="string")return v.slice(0,200);if(t!=="object")return v;if(depth>=6)return "<depth limit>";if(seen.has(v))return "<circular>";seen.add(v);const out=Array.isArray(v)?[]:Object.create(null);for(const key of Object.keys(v).slice(0,50)){const d=Object.getOwnPropertyDescriptor(v,key);if(d)out[key]="value" in d?__SN(d.value,seen,depth+1):"<getter>"}return out}
+function __VAL(v){try{const s=JSON.stringify(__SN(v))??String(v);return s.length<=8192?s:JSON.stringify("<snapshot exceeds 8192 character limit>")}catch(e){return "<unprintable>"}}
+function __A(n,l,v){__W({k:"assign",l,f:"",d:__DEP,n:__esc(n),v:__VAL(v)})}
 function __AV(n,l,v){__A(n,l,v);return v}
 function __B(l,c,t){__W({k:"branch",l,f:"",d:__DEP,c:__esc(c),v:"",t:!!t});return !!t}
-function __S(l,c,v){__W({k:"branch",l,f:"",d:__DEP,c:__esc(c),v:__esc(typeof v==="object"?JSON.stringify(v):v),t:true});return v}
+function __S(l,c,v){__W({k:"branch",l,f:"",d:__DEP,c:__esc(c),v:__VAL(v),t:true});return v}
 function __C(f,l){__DEP++;__W({k:"call",l,f:__esc(f),d:__DEP})}
-function __R(f,l,v){__W({k:"return",l,f:__esc(f),d:__DEP,v:__esc(typeof v==="object"?JSON.stringify(v):v)});if(__DEP>0)__DEP--;return v}
+function __R(f,l,v){__W({k:"return",l,f:__esc(f),d:__DEP,v:__VAL(v)});if(__DEP>0)__DEP--;return v}
 function __RV(f,l){__W({k:"returnvoid",l,f:__esc(f),d:__DEP});if(__DEP>0)__DEP--}
 `;
 
@@ -62,24 +67,37 @@ function assignTargets(node: any): string[] {
     else if (n.type === "ParenthesizedExpression") visit(n.expression);
     else if (n.type === "ArrayPattern") n.elements.forEach((e: any) => e && visit(e));
     else if (n.type === "ObjectPattern") n.properties.forEach((p: any) => visit(p.value ?? p.argument));
-    // MemberExpression / others intentionally skipped
+    else if (n.type === "MemberExpression") visit(n.object);
   };
   visit(node);
   return [...new Set(out)];
 }
 
 export function instrumentJs(src: string): JsInstrumentResult {
-  const moduleKind: "cjs" | "esm" = /(^|\n)\s*(import\s|export\s)/.test(src) ? "esm" : "cjs";
   let ast: any;
   try {
     ast = acorn.parse(src, { ecmaVersion: "latest", sourceType: "module", locations: true });
   } catch {
-    ast = acorn.parse(src, { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true, locations: true });
+    ast = acorn.parse(src, {
+      ecmaVersion: "latest",
+      sourceType: "script",
+      allowReturnOutsideFunction: true,
+      locations: true,
+    });
   }
+  let moduleKind: "cjs" | "esm" = ast.body.some((n: any) => /^(Import|Export)/.test(n.type)) ? "esm" : "cjs";
+  walk.ancestor(ast, {
+    MetaProperty(node: any) {
+      if (node.meta.name === "import") moduleKind = "esm";
+    },
+    AwaitExpression(_node: any, _state: any, ancestors: any[]) {
+      if (!ancestors.some((n) => /Function/.test(n.type))) moduleKind = "esm";
+    },
+  });
 
   const insertions: Insertion[] = [];
-  const ins = (pos: number, text: string) => {
-    if (insertions.length < MAX_PROBES) insertions.push({ pos, text });
+  const ins = (pos: number, text: string, priority = 0) => {
+    if (insertions.length < MAX_PROBES) insertions.push({ pos, text, priority });
   };
   let probes = 0;
 
@@ -96,7 +114,9 @@ export function instrumentJs(src: string): JsInstrumentResult {
   const parents = new Map<any, any>();
   walk.full(ast, (node: any, state: any, type: string) => {
     // walk.full doesn't give parent directly; build via simple recursive walk instead
-    void node; void state; void type;
+    void node;
+    void state;
+    void type;
   });
   const buildParents = (node: any, parent: any) => {
     if (!node || typeof node !== "object") return;
@@ -129,7 +149,29 @@ export function instrumentJs(src: string): JsInstrumentResult {
       const expr = node.expression;
       let targets: string[] | null = null;
       if (expr.type === "AssignmentExpression") targets = assignTargets(expr.left);
-      else if (expr.type === "UpdateExpression" && expr.argument.type === "Identifier") targets = [expr.argument.name];
+      else if (expr.type === "UpdateExpression" && expr.argument.type === "Identifier")
+        targets = [expr.argument.name];
+      else if (
+        expr.type === "CallExpression" &&
+        expr.callee.type === "MemberExpression" &&
+        expr.callee.property.type === "Identifier" &&
+        [
+          "push",
+          "pop",
+          "shift",
+          "unshift",
+          "splice",
+          "reverse",
+          "sort",
+          "fill",
+          "copyWithin",
+          "set",
+          "add",
+          "delete",
+          "clear",
+        ].includes(expr.callee.property.name)
+      )
+        targets = assignTargets(expr.callee.object);
       if (!targets || targets.length === 0) return;
       if (expr.type === "AssignmentExpression" && expr.operator === "=") {
         // also handles chained `a = b = 1` — inner one is its own ExpressionStatement? no, nested.
@@ -140,28 +182,31 @@ export function instrumentJs(src: string): JsInstrumentResult {
         });
         targets = [...targets, ...nested];
       }
-      for (const t of targets.slice(0, 3)) {
-        ins(node.end, ` __A(${JSON.stringify(t)},${node.loc?.start?.line ?? 0},${t});`);
-        probes++;
-      }
+      const values = [...new Set(targets)]
+        .slice(0, 3)
+        .map((t) => `[${JSON.stringify(t)},${t}]`)
+        .join(",");
+      ins(expr.start, `__UP(${node.loc.start.line},(`);
+      ins(expr.end, `),${values})`);
+      probes++;
     },
     VariableDeclaration(node: any, _state: any, ancestors: any[]) {
       // for-init declarations are handled by the ForStatement visitor
-      if (ancestors.some((a) => a.type === "ForStatement" && a.init === node)) return;
+      if (
+        ancestors.some(
+          (a) =>
+            (a.type === "ForStatement" && a.init === node) ||
+            ((a.type === "ForOfStatement" || a.type === "ForInStatement") && a.left === node),
+        )
+      )
+        return;
       if (node.kind !== "const" && node.kind !== "let" && node.kind !== "var") return;
-      const names: string[] = [];
       for (const d of node.declarations) {
-        if (d.init && d.id.type === "Identifier") names.push(d.id.name);
-        else if (d.init && d.id.type === "ObjectPattern") {
-          for (const p of d.id.properties) if (p.value?.type === "Identifier") names.push(p.value.name);
-        } else if (d.init && d.id.type === "ArrayPattern") {
-          for (const el of d.id.elements) if (el?.type === "Identifier") names.push(el.name);
+        if (d.init && d.id.type === "Identifier") {
+          ins(d.init.start, `__AV(${JSON.stringify(d.id.name)},${node.loc.start.line},(`);
+          ins(d.init.end, `))`);
+          probes++;
         }
-      }
-      const line = node.loc?.start?.line ?? 0;
-      for (const n of names.slice(0, 4)) {
-        ins(node.end, ` __A(${JSON.stringify(n)},${line},${n});`);
-        probes++;
       }
     },
     IfStatement(node: any) {
@@ -212,11 +257,13 @@ export function instrumentJs(src: string): JsInstrumentResult {
       // update `i++` / `i += 2` / `i = i + 1`
       if (node.update) {
         let name: string | null = null;
-        if (node.update.type === "UpdateExpression" && node.update.argument.type === "Identifier") name = node.update.argument.name;
-        else if (node.update.type === "AssignmentExpression" && node.update.left.type === "Identifier") name = node.update.left.name;
+        if (node.update.type === "UpdateExpression" && node.update.argument.type === "Identifier")
+          name = node.update.argument.name;
+        else if (node.update.type === "AssignmentExpression" && node.update.left.type === "Identifier")
+          name = node.update.left.name;
         if (name) {
-          ins(node.update.start, `__AV(${JSON.stringify(name)},${line},(`);
-          ins(node.update.end, `))`);
+          ins(node.update.start, `__UP(${line},(`);
+          ins(node.update.end, `),[${JSON.stringify(name)},${name}])`);
           probes++;
         }
       }
@@ -232,7 +279,8 @@ export function instrumentJs(src: string): JsInstrumentResult {
       const fn = enclosingFn(node);
       const line = node.loc?.start?.line ?? 0;
       if (!node.argument) {
-        ins(node.end, ` __RV(${JSON.stringify(fn)},${line}); `);
+        ins(node.start, `{ __RV(${JSON.stringify(fn)},${line}); `);
+        ins(node.end, ` }`);
       } else if (node.argument.type !== "ObjectExpression" && node.argument.type !== "SequenceExpression") {
         ins(node.argument.start, `__R(${JSON.stringify(fn)},${line},(`);
         ins(node.argument.end, `))`);
@@ -242,27 +290,84 @@ export function instrumentJs(src: string): JsInstrumentResult {
       }
       probes++;
     },
-    FunctionDeclaration(node: any) {
-      if (!node.body || node.body.type !== "BlockStatement") return;
-      const line = node.body.loc?.start?.line ?? 0;
-      const name = node.id?.name ?? "";
-      ins(node.body.start + 1, ` __C(${JSON.stringify(name)},${line});`);
-      // implicit return at function end keeps depth balanced
-      ins(node.body.end, ` __RV(${JSON.stringify(name)},${line}); `);
-      probes += 2;
-    },
+    FunctionDeclaration: probeFunction,
+    FunctionExpression: probeFunction,
+    ArrowFunctionExpression: probeFunction,
   });
+
+  function probeFunction(node: any) {
+    if (!node.body || node.body.type !== "BlockStatement") return;
+    const line = node.body.loc?.start?.line ?? 0;
+    const name = node.id?.name ?? "";
+    const directives = node.body.body.filter((n: any) => n.directive);
+    const entry = directives.length ? directives[directives.length - 1].end : node.body.start + 1;
+    const params = node.params.flatMap((param: any) =>
+      assignTargets(param.type === "AssignmentPattern" ? param.left : param),
+    );
+    ins(
+      entry,
+      `; __C(${JSON.stringify(name || "anonymous")},${line});${params.map((param: string) => `__A(${JSON.stringify(param)},${line},${param});`).join("")}`,
+    );
+    // implicit return at function end keeps depth balanced
+    ins(node.body.end - 1, `; __RV(${JSON.stringify(name)},${line}); `, 1);
+    probes += 2;
+  }
+
+  // Record loop bindings without inserting statements into the for (...) header.
+  walk.simple(ast, {
+    ForOfStatement: probeIteration,
+    ForInStatement: probeIteration,
+  });
+  function probeIteration(node: any) {
+    const target = node.left.type === "VariableDeclaration" ? node.left.declarations[0].id : node.left;
+    if (target.type !== "Identifier") return;
+    const probe = `__A(${JSON.stringify(target.name)},${node.loc.start.line},${target.name});`;
+    if (node.body.type === "BlockStatement") ins(node.body.start + 1, probe);
+    else {
+      ins(node.body.start, `{${probe}`);
+      ins(node.body.end, "}");
+    }
+    probes++;
+  }
 
   function srcText(node: any): string {
     return src.slice(node.start, node.end);
   }
 
-  // apply insertions (string indices — sort desc)
   let code = src;
-  const sorted = [...insertions].sort((a, b) => b.pos - a.pos);
-  for (const item of sorted) {
-    code = code.slice(0, item.pos) + item.text + code.slice(item.pos);
+  const runtime =
+    (moduleKind === "esm" ? RUNTIME_ESM : RUNTIME_CJS) +
+    "\nfunction __UP(l,v,...pairs){for(const [n,x] of pairs)__A(n,l,x);return v}\n";
+  // Runtime bindings are private. Choose a namespace absent from the source.
+  let namespace = "__autopsy_runtime";
+  while (src.includes(namespace)) namespace += "_";
+  for (const helper of ["A", "AV", "B", "S", "C", "R", "RV", "UP"]) {
+    // Replace only injected calls; user source is never renamed.
+    for (const insertion of insertions)
+      insertion.text = insertion.text.replace(
+        new RegExp(`\\b__${helper}\\(`, "g"),
+        `${namespace}.${helper}(`,
+      );
   }
-  const preamble = moduleKind === "esm" ? RUNTIME_ESM : RUNTIME_CJS;
-  return { moduleKind, code: preamble + "\n" + code, probes: probes + 1 };
+  code = src;
+  for (const item of [...insertions].sort((a, b) => b.pos - a.pos || b.priority - a.priority))
+    code = code.slice(0, item.pos) + item.text + code.slice(item.pos);
+  const fsImport = moduleKind === "esm" ? `import ${namespace}_fs from "node:fs";` : "";
+  const privateRuntime =
+    moduleKind === "esm"
+      ? runtime.replace('import __FS from "node:fs";', `const __FS=${namespace}_fs;`)
+      : runtime;
+  const preamble = `${fsImport}const ${namespace}=(()=>{${privateRuntime}\nreturn {A:__A,AV:__AV,B:__B,S:__S,C:__C,R:__R,RV:__RV,UP:__UP};})();`;
+  // Preserve directive prologues and hashbangs before the generated runtime.
+  const directives = ast.body.filter((n: any) => n.directive);
+  const prefixEnd = directives.length
+    ? directives[directives.length - 1].end
+    : src.startsWith("#!")
+      ? src.indexOf("\n") + 1
+      : 0;
+  return {
+    moduleKind,
+    code: code.slice(0, prefixEnd) + "\n" + preamble + "\n" + code.slice(prefixEnd),
+    probes: probes + 1,
+  };
 }

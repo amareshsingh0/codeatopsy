@@ -6,3 +6,13 @@ node_modules
 **/.next
 .data
 .vercel
+**/.next-local-*
+**/.env*
+**/*.pem
+**/*.key
+**/credentials*
+.aws
+.codex
+.agents
+docs/verification
+apps/web/public/visuals/*.png

@@ -28,7 +28,8 @@ function normCond(s: string): string {
 
 function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
-  const m = a.length, n = b.length;
+  const m = a.length,
+    n = b.length;
   if (!m || !n) return m || n;
   let prev = new Array<number>(n + 1);
   let cur = new Array<number>(n + 1);
@@ -45,7 +46,8 @@ function levenshtein(a: string, b: string): number {
 
 /** branches align when their conditions are identical or near-identical text */
 function condsAlign(a: string, b: string): boolean {
-  const na = normCond(a), nb = normCond(b);
+  const na = normCond(a),
+    nb = normCond(b);
   if (na === nb) return true;
   return levenshtein(na, nb) <= Math.max(2, Math.floor(Math.min(na.length, nb.length) * 0.25));
 }
@@ -85,31 +87,47 @@ function disagree(a: TraceEvent, b: TraceEvent): boolean {
 
 function eventText(e: TraceEvent): string {
   switch (e.kind) {
-    case "assign": return `${e.name} = ${e.value}`;
-    case "branch": return `condition "${e.cond}" → ${e.taken ? "true" : "false"}`;
-    case "call": return `call ${e.fn}()`;
-    case "return": return `${e.fn}() returned ${e.value}`;
-    case "returnvoid": return `${e.fn}() returned`;
-    case "line": return `executed line ${e.line}`;
-    default: return e.kind;
+    case "assign":
+      return `${e.name} = ${e.value}`;
+    case "branch":
+      return `condition "${e.cond}" → ${e.taken ? "true" : "false"}`;
+    case "call":
+      return `call ${e.fn}()`;
+    case "return":
+      return `${e.fn}() returned ${e.value}`;
+    case "returnvoid":
+      return `${e.fn}() returned`;
+    case "line":
+      return `executed line ${e.line}`;
+    default:
+      return e.kind;
   }
 }
 
 function kindToDivKind(kind: TraceEvent["kind"]): Divergence["kind"] {
   switch (kind) {
-    case "assign": return "value";
-    case "branch": return "control";
-    default: return "value";
+    case "assign":
+      return "value";
+    case "branch":
+      return "control";
+    default:
+      return "value";
   }
 }
 
 export function alignTraces(student: Trace, reference: Trace, testId: string): AlignResult {
-  const s = student.events, r = reference.events;
-  let i = 0, j = 0, matched = 0, skippedStudent = 0, skippedReference = 0;
+  const s = student.events,
+    r = reference.events;
+  let i = 0,
+    j = 0,
+    matched = 0,
+    skippedStudent = 0,
+    skippedReference = 0;
   const pairs: Array<{ s: number; r: number }> = [];
 
   while (i < s.length && j < r.length) {
-    const a = s[i], b = r[j];
+    const a = s[i],
+      b = r[j];
     if (comparable(a, b)) {
       pairs.push({ s: a.seq, r: b.seq });
       if (disagree(a, b)) {
@@ -130,7 +148,9 @@ export function alignTraces(student: Trace, reference: Trace, testId: string): A
           skippedReference,
         };
       }
-      i++; j++; matched++;
+      i++;
+      j++;
+      matched++;
       continue;
     }
     // try to resync within a lookahead window on both sides
@@ -140,7 +160,8 @@ export function alignTraces(student: Trace, reference: Trace, testId: string): A
         if (comparable(s[i + di], r[j + dj])) {
           skippedStudent += di;
           skippedReference += dj;
-          i += di; j += dj;
+          i += di;
+          j += dj;
           resynced = true;
           break outer;
         }
@@ -166,7 +187,7 @@ export function alignTraces(student: Trace, reference: Trace, testId: string): A
     }
   }
 
-  if (i < s.length || j < r.length) {
+  if ((i < s.length || j < r.length) && !student.meta.truncated && !reference.meta.truncated) {
     const a = s[i] ?? s[s.length - 1];
     const b = r[j] ?? r[r.length - 1];
     const kind = i >= s.length ? "missing" : "extra";

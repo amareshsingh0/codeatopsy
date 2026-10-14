@@ -1,10 +1,33 @@
 import "server-only";
-import { JobRequest, Language, type SubmissionStatus } from "@codeautopsy/schemas";
+import {
+  ExecutionResult,
+  JobRequest,
+  Language,
+  JobStatus,
+  type SubmissionStatus,
+} from "@codeautopsy/schemas";
 import type { Problem } from "@codeautopsy/schemas";
 
-export const EXECUTION_NODE_URL =
-  process.env.EXECUTION_NODE_URL ?? "http://127.0.0.1:8787";
+export const EXECUTION_NODE_URL = process.env.EXECUTION_NODE_URL ?? "http://127.0.0.1:8787";
 const SECRET = process.env.AUTOPSY_NODE_SECRET;
+
+/** Polling is also the recovery path when a callback is absent or lost. */
+export async function pollExecution(jobId: string) {
+  const res = await fetch(`${EXECUTION_NODE_URL}/jobs/${encodeURIComponent(jobId)}`, {
+    headers: SECRET ? { "x-autopsy-secret": SECRET } : {},
+    cache: "no-store",
+    signal: AbortSignal.timeout(5000),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`execution node responded ${res.status}`);
+  const body = (await res.json()) as { jobId?: unknown; status?: unknown; result?: unknown; error?: unknown };
+  if (body.jobId !== jobId) throw new Error("execution node returned a different job");
+  return {
+    status: JobStatus.parse(body.status),
+    result: body.result ? ExecutionResult.parse(body.result) : undefined,
+    error: typeof body.error === "string" ? body.error : undefined,
+  };
+}
 
 export async function dispatchExecution(
   jobId: string,
@@ -36,15 +59,9 @@ export async function dispatchExecution(
   } catch (err) {
     return {
       ok: false,
-      error: `cannot reach execution node at ${EXECUTION_NODE_URL} — is it running? (${err instanceof Error ? err.message : err})`,
+      error: "Execution service could not be reached. Check the worker configuration or retry shortly.",
     };
   }
 }
 
-export const STATUS_FLOW: SubmissionStatus[] = [
-  "queued",
-  "compiling",
-  "running",
-  "analyzing",
-  "completed",
-];
+export const STATUS_FLOW: SubmissionStatus[] = ["queued", "compiling", "running", "analyzing", "completed"];

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { cpp } from "@codemirror/lang-cpp";
 import { python } from "@codemirror/lang-python";
@@ -77,12 +77,20 @@ export function CodeEditor({
   readOnly?: boolean;
 }) {
   const viewRef = useRef<EditorView | null>(null);
-  const [extensions] = useState(() => [...langExtension(language), highlightField, EditorView.lineWrapping]);
+  const extensions = useMemo(
+    () => [...langExtension(language), highlightField, EditorView.lineWrapping],
+    [language],
+  );
 
   useEffect(() => {
     viewRef.current?.dispatch({
       effects: setHighlights.of({ currentLine, markerLine, markerClass }),
     });
+    if (currentLine != null && viewRef.current) {
+      const view = viewRef.current;
+      const line = view.state.doc.line(Math.max(1, Math.min(currentLine, view.state.doc.lines)));
+      view.dispatch({ effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
+    }
   }, [currentLine, markerLine, markerClass, value]);
 
   return (

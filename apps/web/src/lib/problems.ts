@@ -1,6 +1,6 @@
 import "server-only";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Problem } from "@codeautopsy/schemas";
 
 export type PublicProblem = Omit<Problem, "referenceSource" | "studentSource"> & {
@@ -8,10 +8,11 @@ export type PublicProblem = Omit<Problem, "referenceSource" | "studentSource"> &
 };
 
 const PROBLEMS_DIR = process.env.AUTOPSY_PROBLEMS_DIR
-  ? join(process.cwd(), process.env.AUTOPSY_PROBLEMS_DIR)
+  ? resolve(/* turbopackIgnore: true */ process.cwd(), process.env.AUTOPSY_PROBLEMS_DIR)
   : join(process.cwd(), "..", "..", "problems");
 
 function readProblem(slug: string): Problem | null {
+  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(slug)) return null;
   const dir = join(PROBLEMS_DIR, slug);
   const metaPath = join(dir, "problem.json");
   if (!existsSync(metaPath)) return null;
@@ -49,7 +50,10 @@ export function getProblem(slug: string): { problem: Problem } | null {
 export function toPublic(p: Problem): PublicProblem {
   const { referenceSource: _ref, ...rest } = p;
   void _ref;
-  return rest;
+  return {
+    ...rest,
+    tests: rest.tests.map((test) => (test.hidden ? { ...test, input: "", expectedOutput: "" } : test)),
+  };
 }
 
 /** full problem (with reference source) — used when dispatching execution jobs */

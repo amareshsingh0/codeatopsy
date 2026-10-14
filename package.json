@@ -7,14 +7,23 @@
     "node": ">=20.9.0"
   },
   "scripts": {
-    "dev": "turbo run dev",
+    "dev": "node scripts/dev.mjs",
     "build": "turbo run build",
     "test": "turbo run test",
+    "smoke": "node scripts/smoke.mjs",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "clean": "turbo run clean && node -e \"require('fs').rmSync('node_modules',{recursive:true,force:true})\""
   },
+  "pnpm": {
+    "overrides": {
+      "sharp": "0.34.5"
+    }
+  },
   "devDependencies": {
+    "embedded-postgres": "18.4.0-beta.17",
+    "prettier": "^3.9.10",
+    "sharp": "0.34.5",
     "turbo": "^2.5.0",
     "typescript": "^5.6.0"
   }

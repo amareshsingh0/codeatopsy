@@ -1,13 +1,25 @@
 import type { NextConfig } from "next";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const nextConfig: NextConfig = {
-  transpilePackages: [
-    "@codeautopsy/schemas",
-    "@codeautopsy/db",
-    "@codeautopsy/trace-core",
-  ],
+  distDir: process.env.AUTOPSY_NEXT_DIST_DIR ?? ".next",
+  outputFileTracingRoot: resolve(dirname(fileURLToPath(import.meta.url)), "../.."),
+  transpilePackages: ["@codeautopsy/schemas", "@codeautopsy/db", "@codeautopsy/trace-core"],
   outputFileTracingIncludes: {
-    "/api/**": ["../../problems/**/*"],
+    "/**": ["../../problems/**/*"],
+  },
+  outputFileTracingExcludes: {
+    "/**": [
+      "**/.env*",
+      "**/*secret*",
+      "**/*.pem",
+      "**/*.key",
+      "../../.git/**/*",
+      "../../.data/**/*",
+      "../../.zcode/**/*",
+      "../../legacy/**/*",
+    ],
   },
 };
 

@@ -1,0 +1,17 @@
+.git
+node_modules
+**/node_modules
+**/.next
+**/.next-local-*
+**/dist
+.turbo
+.data
+**/.data
+.env*
+**/.env*
+**/*secret*
+**/*.pem
+**/*.key
+.vercel
+.zcode
+legacy

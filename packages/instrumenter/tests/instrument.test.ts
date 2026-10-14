@@ -131,11 +131,10 @@ describe.skipIf(!hasGxx())("instrumenter — end-to-end compile+run", () => {
       const exe = join(dir, "student.exe");
       const trace = join(dir, "trace.jsonl");
       writeFileSync(cpp, code);
-      execFileSync(
-        "g++",
-        ["-std=c++17", "-O0", "-include", runtimeHeaderPath, "-o", exe, cpp],
-        { stdio: ["ignore", "pipe", "pipe"], timeout: 60000 },
-      );
+      execFileSync("g++", ["-std=c++17", "-O0", "-include", runtimeHeaderPath, "-o", exe, cpp], {
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 60000,
+      });
       const out = execFileSync(exe, {
         input: "7\n2 4 7 9 11 15 18\n18\n",
         timeout: 15000,
@@ -144,7 +143,10 @@ describe.skipIf(!hasGxx())("instrumenter — end-to-end compile+run", () => {
       expect(out.trim()).toBe("-1"); // the bug reproduces
 
       const raw = readFileSync(trace, "utf8");
-      const lines = raw.trim().split("\n").map((l) => JSON.parse(l));
+      const lines = raw
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l));
       const trailer = lines.filter((l) => "_autopsy_truncated" in l);
       const events = lines.filter((l) => "k" in l);
       expect(trailer).toHaveLength(1);
@@ -153,7 +155,43 @@ describe.skipIf(!hasGxx())("instrumenter — end-to-end compile+run", () => {
       expect(branch).toBeTruthy();
       expect(branch.t).toBe(true);
       const assigns = events.filter((e) => e.k === "assign" && e.n === "left");
-      expect(assigns.length).toBeGreaterThan(0);
+      expect(assigns.map((e) => e.v)).toEqual(["0", "4", "6"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("preserves nested unbraced branches and do/while while recording the final loop counter", () => {
+    const dir = mkdtempSync(join(tmpdir(), "autopsy-controls-"));
+    try {
+      const source =
+        "#include <iostream>\nint main(){ int x=0; if(true) if(false) x=100; else x=2; else x=200; for(int i=0;i<2;i++) x++; do x++; while(x<5); std::cout<<x; return 0; }";
+      const path = join(dir, "source.cpp"),
+        exe = join(dir, "source.exe"),
+        trace = join(dir, "trace.jsonl");
+      writeFileSync(path, instrument(source).code);
+      execFileSync("g++", ["-std=c++17", "-O0", "-include", runtimeHeaderPath, "-o", exe, path], {
+        timeout: 60000,
+        windowsHide: true,
+      });
+      expect(
+        execFileSync(exe, {
+          encoding: "utf8",
+          timeout: 10000,
+          env: { ...process.env, AUTOPSY_TRACE_PATH: trace },
+        }),
+      ).toBe("5");
+      const events = readFileSync(trace, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(events.filter((e) => e.k === "assign" && e.n === "x").map((e) => e.v)).toEqual([
+        "0",
+        "2",
+        "3",
+        "4",
+        "5",
+      ]);
+      expect(events.filter((e) => e.k === "assign" && e.n === "i").map((e) => e.v)).toEqual(["0", "1", "2"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

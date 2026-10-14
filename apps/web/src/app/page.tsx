@@ -1,95 +1,177 @@
 import Link from "next/link";
+import Image from "next/image";
 import { listProblems } from "@/lib/problems";
-
+import { Icon } from "@/components/Icon";
+import { TracePreview } from "@/components/TracePreview";
+import { SystemStatus } from "@/components/SystemStatus";
 export const dynamic = "force-dynamic";
-
-export default async function Home() {
+export default function Home() {
   const problems = listProblems();
-
   return (
-    <main className="mx-auto max-w-7xl px-6">
-      <section className="py-14 text-center">
-        <div className="chip mx-auto mb-5">evidence-driven debugging</div>
-        <h1 className="text-4xl font-extrabold tracking-tight sm:text-5xl">
-          Stop guessing why your algorithm is wrong.
-        </h1>
-        <p className="mx-auto mt-4 max-w-2xl text-[15px] leading-relaxed" style={{ color: "var(--muted)" }}>
-          CodeAutopsy instruments your C++, records every variable, branch and call,
-          then plays your execution side-by-side with a correct reference — and shows
-          you the <b style={{ color: "var(--text)" }}>exact moment your logic diverges</b>.
-        </p>
-        <div className="mt-7 flex items-center justify-center gap-3">
-          {problems[0] && (
-            <Link href={`/problem/${problems[0].slug}`} className="btn btn-primary">
-              🔬 Try the demo autopsy
+    <main className="shell home">
+      <section className="hero">
+        <div className="hero-copy">
+          <span className="eyebrow">
+            <span className="small-dot" />
+            THE EXECUTION OBSERVATORY
+          </span>
+          <h1>
+            Your code.
+            <br />
+            Its hidden story.
+            <br />
+            <em>Finally, visible.</em>
+          </h1>
+          <p>
+            Go beyond the final answer. Replay what happened, explore changing state, and follow the evidence
+            to the first recorded difference.
+          </p>
+          <div className="hero-actions">
+            <Link href="/playground" className="btn btn-primary">
+              Open the playground
+              <Icon name="arrow" />
             </Link>
-          )}
-          <Link href="/playground" className="btn">🧪 Playground — trace any code</Link>
+            {problems[0] && (
+              <Link href={`/problem/${problems[0].slug}`} className="btn">
+                Investigate a problem
+              </Link>
+            )}
+          </div>
+          <div className="language-strip">
+            <span>Run with</span>
+            <strong>C++</strong>
+            <strong>C</strong>
+            <strong>Python</strong>
+            <strong>JavaScript</strong>
+            <strong>Java</strong>
+          </div>
+          <SystemStatus />
         </div>
-      </section>
-
-      <section className="grid gap-4 pb-12 sm:grid-cols-3">
-        {[
-          {
-            icon: "🧬",
-            title: "Instrumented execution",
-            body: "Your source is transformed with lightweight probes that record assignments, conditions, calls and returns — without changing what your program does.",
-          },
-          {
-            icon: "🪞",
-            title: "Reference replay",
-            body: "The same tests run against a correct solution. Both traces are aligned so you can scrub through two executions in sync.",
-          },
-          {
-            icon: "🔎",
-            title: "First-divergence report",
-            body: "The autopsy report ranks root-cause hypotheses and points at the line where your state first disagreed with the reference.",
-          },
-        ].map((f) => (
-          <div key={f.title} className="panel p-5">
-            <div className="text-2xl">{f.icon}</div>
-            <h3 className="mt-2 text-[15px] font-bold">{f.title}</h3>
-            <p className="mt-1 text-[13px] leading-relaxed" style={{ color: "var(--muted)" }}>
-              {f.body}
+        <div className="hero-art">
+          <Image
+            src="/visuals/observatory.webp"
+            alt="Illustration of two execution paths with a coral divergence point"
+            fill
+            sizes="(max-width: 800px) 100vw, 50vw"
+            preload
+            className="observatory-image"
+          />
+          <div className="art-caption">
+            <span className="eyebrow">01 / FOLLOW THE EVIDENCE</span>
+            <span className="art-caption-rule" />
+            <p>
+              Same input.
+              <br />
+              Two executions.
+              <br />
+              <strong>One moment that matters.</strong>
             </p>
           </div>
-        ))}
+          <span className="art-note">Concept illustration</span>
+        </div>
       </section>
-
-      <section id="problems" className="pb-16">
-        <h2 className="mb-4 text-lg font-bold">Problem library</h2>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {problems.map((p) => (
-            <Link
-              key={p.slug}
-              href={`/problem/${p.slug}`}
-              className="panel group p-5 transition hover:border-[color:var(--accent)]"
-            >
-              <div className="flex items-center justify-between">
-                <span className="chip">{p.difficulty}</span>
-                <span className="text-[11px]" style={{ color: "var(--muted)" }}>
-                  {p.tests.length} tests
-                </span>
-              </div>
-              <h3 className="mt-3 text-[15px] font-bold group-hover:text-[color:var(--accent)]">
-                {p.title}
-              </h3>
-              <p className="mt-1 line-clamp-3 text-[13px] leading-relaxed" style={{ color: "var(--muted)" }}>
-                {p.blurb}
+      <TracePreview />
+      <section className="feature-section">
+        <div className="section-intro">
+          <span className="eyebrow">FROM OUTPUT TO UNDERSTANDING</span>
+          <h2>
+            A debugger you can
+            <br />
+            <em>see and explore.</em>
+          </h2>
+          <p>Move at your own pace. Inspect real captured values instead of guessing what the program did.</p>
+        </div>
+        <div className="feature-grid">
+          <article className="feature-card panel">
+            <div className="feature-image">
+              <Image
+                src="/visuals/memory-map.webp"
+                alt="Illustration of a highlighted cell in a memory grid"
+                fill
+                sizes="(max-width: 700px) 100vw, 35vw"
+              />
+            </div>
+            <div className="feature-copy">
+              <span className="eyebrow">02 / EXPLORE STATE</span>
+              <h3>Give values a shape.</h3>
+              <p>
+                Arrays, matrices, objects and strings become inspectable state. Follow variable history and
+                compare captured reference values.
               </p>
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {p.topics.slice(0, 3).map((t) => (
-                  <span key={t} className="chip text-[10px]">{t}</span>
+              <Link href="/playground">
+                Explore your code
+                <Icon name="arrow" />
+              </Link>
+            </div>
+          </article>
+          <article className="feature-card panel">
+            <div className="feature-image">
+              <Image
+                src="/visuals/trace-steps.webp"
+                alt="Illustration of layered execution steps connected by a timeline"
+                fill
+                sizes="(max-width: 700px) 100vw, 35vw"
+              />
+            </div>
+            <div className="feature-copy">
+              <span className="eyebrow">03 / REPLAY THE MOMENT</span>
+              <h3>Find the meaningful difference.</h3>
+              <p>
+                Pause, scrub, search events and investigate a recorded divergence. Compiler and runtime
+                diagnostics remain visible alongside trace coverage.
+              </p>
+              <a href="#problems">
+                Choose an investigation
+                <Icon name="arrow" />
+              </a>
+            </div>
+          </article>
+        </div>
+      </section>
+      <section id="problems" className="library-section">
+        <div className="library-heading">
+          <div>
+            <span className="eyebrow">THE PROBLEM LIBRARY</span>
+            <h2>Start with a curious question.</h2>
+          </div>
+          <span className="chip">{problems.length} investigations</span>
+        </div>
+        <div className="problem-grid">
+          {problems.map((problem, i) => (
+            <Link key={problem.slug} href={`/problem/${problem.slug}`} className="panel problem-card">
+              <div className="problem-card-top">
+                <span className="problem-number mono">{String(i + 1).padStart(2, "0")}</span>
+                <span className={`chip difficulty-${problem.difficulty}`}>{problem.difficulty}</span>
+              </div>
+              <h3>{problem.title}</h3>
+              <p>{problem.blurb}</p>
+              <div className="problem-topics">
+                {problem.topics.slice(0, 3).map((topic) => (
+                  <span key={topic}>{topic}</span>
                 ))}
+              </div>
+              <div className="problem-card-bottom">
+                <span>{problem.tests.length} tests · reference comparison</span>
+                <Icon name="arrow" />
               </div>
             </Link>
           ))}
-          {problems.length === 0 && (
-            <p className="text-sm" style={{ color: "var(--muted)" }}>
-              No problems found. Add one under <code>problems/</code>.
-            </p>
-          )}
         </div>
+        {!problems.length && <p className="muted">No investigations are available yet.</p>}
+      </section>
+      <section className="closing-note">
+        <Icon name="layers" size={28} />
+        <div>
+          <h2>Bring your own code. Follow its own story.</h2>
+          <p>
+            Execution and verdicts in five languages. Traces for supported C++, Python, JavaScript and
+            compatible C code; Java currently provides output and diagnostics.
+          </p>
+        </div>
+        <Link href="/playground" className="btn btn-primary">
+          Start exploring
+          <Icon name="arrow" />
+        </Link>
       </section>
     </main>
   );

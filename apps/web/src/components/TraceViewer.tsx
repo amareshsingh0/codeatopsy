@@ -1,8 +1,11 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Divergence, Language, Trace } from "@codeautopsy/schemas";
+import { createTraceIndex, timelineBuckets } from "@/lib/trace-state";
 import { CodeEditor } from "./CodeEditor";
-
+import { ExecutionCanvas } from "./ExecutionCanvas";
+import { Icon } from "./Icon";
+import { LearnStep } from "./LearnStep";
 interface Props {
   studentSource: string;
   referenceSource?: string;
@@ -11,552 +14,473 @@ interface Props {
   referenceTrace?: Trace | null;
   pairs?: Array<{ s: number; r: number }>;
   divergence?: Divergence | null;
-  /** program stdout for the selected run (shown in the output panel) */
   output?: string | null;
 }
-
-const KIND_COLOR: Record<string, string> = {
+const COLORS: Record<string, string> = {
   assign: "var(--accent)",
   branch: "var(--warn)",
-  call: "var(--accent-2)",
-  line: "#9d7bff",
-  return: "var(--accent-2)",
-  returnvoid: "var(--accent-2)",
-  output: "var(--muted)",
+  call: "#6f70b5",
+  line: "#8a9b93",
+  return: "#6f70b5",
+  returnvoid: "#6f70b5",
+  output: "#438ca0",
 };
-
-const KIND_LABEL: Record<string, string> = {
-  assign: "assignment",
-  branch: "condition",
-  call: "call",
-  line: "statement",
-  return: "return",
-  returnvoid: "return",
-  output: "output",
-};
-
-const MARKER_VARS = new Set(["left", "lo", "low", "right", "hi", "high", "mid", "l", "r"]);
-
-type ParsedValue =
-  | { kind: "grid"; rows: string[][] }
-  | { kind: "array"; cells: string[]; numbers: number[] | null }
-  | { kind: "string"; chars: string }
-  | { kind: "scalar"; text: string };
-
-function parseValue(v: string | undefined): ParsedValue {
-  if (v === undefined) return { kind: "scalar", text: "?" };
-  if (v.startsWith("[[")) {
-    try {
-      const rows = (JSON.parse(v) as unknown[][]).map((r) => r.map((c) => String(c)));
-      if (rows.length && rows.every((r) => Array.isArray(r) && r.length > 0)) {
-        return { kind: "grid", rows };
-      }
-    } catch {
-      /* fall through */
-    }
+class VisualBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
   }
-  if (v.startsWith("[") && v.endsWith("]")) {
-    const inner = v.slice(1, -1);
-    const cells = inner === "" ? [] : inner.split(",").map((s) => s.trim());
-    const numbers = cells.every((c) => /^-?\d+(\.\d+)?$/.test(c))
-      ? cells.map((c) => Number(c))
-      : null;
-    return { kind: "array", cells, numbers };
+  render() {
+    return this.state.failed ? (
+      <div className="panel p-5" role="alert">
+        This state could not be visualized. Source, event log and program output remain available.
+      </div>
+    ) : (
+      this.props.children
+    );
   }
-  if (v.startsWith('"') && v.endsWith('"') && v.length >= 2) {
-    return { kind: "string", chars: v.slice(1, -1) };
-  }
-  return { kind: "scalar", text: v };
 }
-
-function snapshotVars(events: Trace["events"], uptoInclusive: number): Map<string, string> {
-  const m = new Map<string, string>();
-  for (let k = 0; k <= uptoInclusive && k < events.length; k++) {
-    const e = events[k];
-    if (e.kind === "assign" && e.name) m.set(e.name, e.value ?? "?");
-  }
-  return m;
-}
-
 export function TraceViewer({
   studentSource,
   referenceSource = "",
   language,
   studentTrace,
-  referenceTrace = null,
+  referenceTrace,
   pairs = [],
-  divergence = null,
-  output = null,
+  divergence,
+  output,
 }: Props) {
   const events = studentTrace.events;
-  const hasRef = !!(referenceTrace && referenceTrace.events.length > 0 && referenceSource);
-  const [idx, setIdx] = useState(0);
+  const last = Math.max(0, events.length - 1);
+  const [index, setIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(8);
-  const [showRef, setShowRef] = useState(true);
-
-  const lastSeq = Math.max(0, events.length - 1);
-
+  const [speed, setSpeed] = useState(1);
+  const [showSource, setShowSource] = useState(false);
+  const [showReference, setShowReference] = useState(true);
+  const [referenceCursor, setReferenceCursor] = useState<number | null>(null);
+  const [filter, setFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(0);
+  const [learn, setLearn] = useState(true);
+  const stateIndex = useMemo(() => createTraceIndex(events), [events]);
+  const refEvents = referenceTrace?.events;
+  const referenceIndex = useMemo(() => createTraceIndex(refEvents ?? []), [refEvents]);
+  const buckets = useMemo(() => timelineBuckets(events), [events]);
+  const hasReference = !!refEvents?.length && !!referenceSource;
   useEffect(() => {
-    setIdx(divergence ? Math.min(divergence.studentSeq, lastSeq) : lastSeq);
+    setIndex(Math.max(0, Math.min(divergence?.studentSeq ?? 0, last)));
     setPlaying(false);
-  }, [studentTrace, divergence, lastSeq]);
-
+    setReferenceCursor(null);
+    setPage(0);
+  }, [studentTrace, divergence, last]);
+  const seek = useCallback(
+    (value: number) => {
+      setPlaying(false);
+      setIndex(Math.max(0, Math.min(last, value)));
+    },
+    [last],
+  );
   useEffect(() => {
     if (!playing) return;
-    const t = setInterval(() => {
-      setIdx((i) => {
-        if (i >= lastSeq) {
-          setPlaying(false);
-          return i;
-        }
-        return i + 1;
-      });
-    }, 1000 / speed);
-    return () => clearInterval(t);
-  }, [playing, speed, lastSeq]);
-
-  // keyboard transport: ←/→ step, space play/pause, Home/End jump
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      if (e.key === "ArrowRight") {
-        setPlaying(false);
-        setIdx((i) => Math.min(lastSeq, i + 1));
-      } else if (e.key === "ArrowLeft") {
-        setPlaying(false);
-        setIdx((i) => Math.max(0, i - 1));
-      } else if (e.key === " ") {
-        e.preventDefault();
-        setPlaying((p) => !p);
-      } else if (e.key === "Home") {
-        setPlaying(false);
-        setIdx(0);
-      } else if (e.key === "End") {
-        setPlaying(false);
-        setIdx(lastSeq);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [lastSeq]);
-
-  const refIdx = useMemo(() => {
-    if (!hasRef) return 0;
-    let r = 0;
-    for (const p of pairs) {
-      if (p.s <= idx) r = Math.max(r, p.r);
-      else break;
+    const timer = setInterval(
+      () =>
+        setIndex((current) => {
+          if (current >= last) {
+            setPlaying(false);
+            return current;
+          }
+          return current + 1;
+        }),
+      1000 / speed,
+    );
+    return () => clearInterval(timer);
+  }, [playing, last, speed]);
+  const onKey = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (
+      (event.target as HTMLElement).closest(
+        "input, textarea, select, button, summary, [contenteditable=true]",
+      )
+    )
+      return;
+    const keys: Record<string, number> = { ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: last };
+    if (event.key in keys) {
+      event.preventDefault();
+      seek(keys[event.key]);
     }
-    return r;
-  }, [pairs, idx, hasRef]);
-
-  const current = events[idx];
-
-  const { variables, changed, callStack, prevVars } = useMemo(() => {
-    const vars = new Map<string, string>();
-    const stack: string[] = [];
-    for (let k = 0; k <= Math.min(idx, lastSeq); k++) {
-      const e = events[k];
-      if (e.kind === "assign" && e.name) vars.set(e.name, e.value ?? "?");
-      else if (e.kind === "call" && e.fn) stack.push(e.fn);
-      else if ((e.kind === "return" || e.kind === "returnvoid") && stack.length) stack.pop();
+    if (event.key === " ") {
+      event.preventDefault();
+      setPlaying((value) => !value);
     }
-    const prev = idx > 0 ? snapshotVars(events, idx - 1) : new Map<string, string>();
-    const ch = new Set<string>();
-    if (current?.kind === "assign" && current.name) ch.add(current.name);
-    return { variables: vars, changed: ch, callStack: stack, prevVars: prev };
-  }, [idx, events, lastSeq, current]);
-
-  const stepText = useMemo(() => {
-    if (!current) return "";
-    const was = (name: string) => {
-      const p = prevVars.get(name);
-      return p !== undefined && p !== variables.get(name) ? ` (was ${p})` : "";
-    };
-    switch (current.kind) {
-      case "assign":
-        return `line ${current.line} · ${current.name} = ${current.value}${was(current.name ?? "")}`;
-      case "branch":
-        return `line ${current.line} · condition "${current.cond}" evaluated to ${current.taken ? "true" : "false"}`;
-      case "call":
-        return `line ${current.line} · entering function ${current.fn}()`;
-      case "line":
-        return `line ${current.line} · statement executed in ${current.fn}()`;
-      case "return":
-        return `line ${current.line} · ${current.fn}() returned ${current.value}`;
-      case "returnvoid":
-        return `line ${current.line} · ${current.fn}() returned`;
-      default:
-        return `line ${current.line} · ${current.kind}`;
+  };
+  const alignedReference = useMemo(() => {
+    let found = 0;
+    for (const pair of pairs) {
+      if (pair.s > index) break;
+      found = pair.r;
     }
-  }, [current, prevVars, variables]);
-
-  const jumpTo = useCallback(
-    (n: number) => {
-      setPlaying(false);
-      setIdx(Math.max(0, Math.min(lastSeq, n)));
-    },
-    [lastSeq],
+    return found;
+  }, [pairs, index]);
+  const refIndex = referenceCursor ?? alignedReference;
+  const state = useMemo(() => stateIndex.snapshot(index), [stateIndex, index]);
+  const previous = useMemo(() => stateIndex.snapshot(index - 1), [stateIndex, index]);
+  const refState = useMemo(() => referenceIndex.snapshot(refIndex), [referenceIndex, refIndex]);
+  const current = events[index];
+  const rows = useMemo(
+    () =>
+      events
+        .map((event, i) => ({ event, i }))
+        .filter(
+          ({ event, i }) =>
+            (filter === "all" || event.kind === filter) &&
+            (!query ||
+              `${i + 1} ${event.line} ${event.name ?? ""} ${event.fn ?? ""} ${event.value ?? ""} ${event.cond ?? ""}`
+                .toLowerCase()
+                .includes(query.toLowerCase())),
+        ),
+    [events, filter, query],
   );
-
-  const kindColor = current ? KIND_COLOR[current.kind] ?? "var(--muted)" : "var(--muted)";
-
+  const rowPage = Math.min(page, Math.max(0, Math.ceil(rows.length / 30) - 1));
+  const description = current
+    ? current.kind === "assign"
+      ? `${current.name} = ${current.value}`
+      : current.kind === "branch"
+        ? `${current.cond} → ${current.taken ? "true" : "false"}`
+        : current.kind === "call"
+          ? `Enter ${current.fn ?? "anonymous"}()`
+          : current.kind === "return"
+            ? `Return ${current.value ?? ""}`
+            : current.kind === "returnvoid"
+              ? "Return"
+              : `Execute ${current.kind}`
+    : "No captured events";
   return (
-    <div className="grid gap-4">
-      {/* ---------- transport ---------- */}
-      <div className="panel flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
-        <div className="flex items-center gap-1.5">
-          <button className="btn" title="Start (Home)" onClick={() => jumpTo(0)} disabled={!events.length}>⏮</button>
-          <button className="btn" title="Step back (←)" onClick={() => jumpTo(idx - 1)} disabled={!events.length}>◀</button>
-          <button
-            className={`btn ${playing ? "" : "btn-accent2"}`}
-            title="Play/Pause (Space)"
-            onClick={() => {
-              if (!playing && idx >= lastSeq) setIdx(0);
-              setPlaying((p) => !p);
+    <section className="trace-viewer" onKeyDown={onKey} aria-label="Execution replay">
+      <div className="replay-heading">
+        <div>
+          <span className="eyebrow">EXECUTION REPLAY</span>
+          <h2>Make every step visible.</h2>
+        </div>
+        <label className="toggle-label">
+          <input
+            type="checkbox"
+            checked={learn}
+            onChange={(e) => {
+              setLearn(e.target.checked);
+              if (e.target.checked) setSpeed(1);
             }}
-            disabled={!events.length}
-          >
-            {playing ? "⏸" : "▶"}
+          />
+          Learn mode
+        </label>
+        <span className="chip">
+          {events.length.toLocaleString()} captured events{studentTrace.meta.truncated ? " · partial" : ""}
+        </span>
+      </div>
+      {divergence && (
+        <div className="divergence-banner">
+          <Icon name="alert" />
+          <div>
+            <strong>First recorded difference · line {divergence.studentLine ?? "?"}</strong>
+            <p>
+              {divergence.studentText} · reference: {divergence.referenceText}
+            </p>
+          </div>
+          <button className="btn" onClick={() => seek(divergence.studentSeq)}>
+            Inspect difference
           </button>
-          <button className="btn" title="Step forward (→)" onClick={() => jumpTo(idx + 1)} disabled={!events.length}>▶</button>
-          <button className="btn" title="End (End)" onClick={() => jumpTo(lastSeq)} disabled={!events.length}>⏭</button>
         </div>
-
-        <div className="mono text-xs" style={{ color: "var(--muted)" }}>
-          step <b style={{ color: "var(--text)" }}>{events.length ? idx + 1 : 0}</b>/{events.length}
-        </div>
-
-        {divergence && (
-          <button
-            className="btn"
-            style={{ borderColor: "var(--danger)", color: "var(--danger)" }}
-            onClick={() => jumpTo(divergence.studentSeq)}
-          >
-            ⚡ Divergence
-          </button>
-        )}
-
-        {studentTrace.meta.truncated && (
-          <span className="chip chip-timeout">⚠ trace truncated (loop too long)</span>
-        )}
-
-        <div className="ml-auto flex items-center gap-2">
-          {hasRef && (
-            <button className="btn" onClick={() => setShowRef((s) => !s)}>
-              {showRef ? "eye: A/B" : "eye-off: A/B"}
+      )}
+      <div
+        className="panel replay-controls"
+        tabIndex={0}
+        aria-label="Replay controls. Arrow keys step; space plays; Home and End jump."
+      >
+        <div className="transport">
+          <div className="transport-buttons">
+            <button
+              className="btn icon-btn"
+              aria-label="First step"
+              disabled={!events.length || index === 0}
+              onClick={() => seek(0)}
+            >
+              <Icon name="first" />
             </button>
-          )}
-          <label className="flex items-center gap-2 text-xs" style={{ color: "var(--muted)" }}>
-            speed
+            <button
+              className="btn icon-btn"
+              aria-label="Previous step"
+              disabled={!events.length || index === 0}
+              onClick={() => seek(index - 1)}
+            >
+              <Icon name="back" />
+            </button>
+            <button
+              className="btn btn-primary"
+              disabled={!events.length}
+              onClick={() => {
+                if (!playing && index === last) setIndex(0);
+                setPlaying(!playing);
+              }}
+            >
+              <Icon name={playing ? "pause" : "play"} />
+              {playing ? "Pause" : "Play"}
+            </button>
+            <button
+              className="btn icon-btn"
+              aria-label="Next step"
+              disabled={!events.length || index === last}
+              onClick={() => seek(index + 1)}
+            >
+              <Icon name="next" />
+            </button>
+            <button
+              className="btn icon-btn"
+              aria-label="Last step"
+              disabled={!events.length || index === last}
+              onClick={() => seek(last)}
+            >
+              <Icon name="last" />
+            </button>
+          </div>
+          <span className="step-counter mono">
+            {events.length ? index + 1 : 0}
+            <span> / {events.length}</span>
+          </span>
+          <label className="speed-control">
+            Speed
             <select
-              className="mono rounded-md border bg-transparent px-2 py-1 text-xs"
-              style={{ borderColor: "var(--border)", color: "var(--text)" }}
+              aria-label="Replay speed"
               value={speed}
               onChange={(e) => setSpeed(Number(e.target.value))}
             >
-              {[2, 4, 8, 16, 32].map((s) => (
-                <option key={s} value={s}>{s}×/s</option>
+              {[1, 2, 4, 8, 16].map((n) => (
+                <option key={n} value={n}>
+                  {n}×
+                </option>
               ))}
             </select>
           </label>
         </div>
-      </div>
-
-      {/* ---------- scrubber + timeline + step description ---------- */}
-      <div className="panel px-4 py-3">
+        <div className="timeline-density" aria-hidden="true">
+          {buckets.map((bucket) => (
+            <span
+              key={bucket.index}
+              style={{ background: COLORS[bucket.kind], opacity: bucket.index <= index ? 1 : 0.3 }}
+            />
+          ))}
+          <span className="timeline-cursor" style={{ left: `${last ? (index / last) * 100 : 0}%` }} />
+        </div>
         <input
           type="range"
-          className="scrubber w-full"
+          className="scrubber"
+          aria-label="Execution step"
+          aria-valuetext={`Step ${events.length ? index + 1 : 0} of ${events.length}, line ${current?.line ?? 0}`}
           min={0}
-          max={lastSeq}
-          value={Math.min(idx, lastSeq)}
-          onChange={(e) => jumpTo(Number(e.target.value))}
-          aria-label="Trace position"
+          max={last}
+          value={index}
+          onChange={(e) => seek(Number(e.target.value))}
+          disabled={!events.length}
         />
-        <div className="scroll-thin mt-3 flex gap-[2px] overflow-x-auto pb-1">
-          {events.map((e, k) => (
-            <button
-              key={e.seq}
-              title={`#${e.seq + 1} ${KIND_LABEL[e.kind] ?? e.kind}${e.name ? ` ${e.name}` : ""}${e.value ? ` = ${e.value}` : ""}${e.cond ? ` → ${e.taken}` : ""} (line ${e.line})`}
-              onClick={() => jumpTo(k)}
-              className="h-4 w-[7px] shrink-0 rounded-[2px] border-0"
-              style={{
-                background: k <= idx ? KIND_COLOR[e.kind] ?? "var(--muted)" : "var(--border)",
-                outline:
-                  k === idx
-                    ? "2px solid var(--text)"
-                    : divergence && e.seq === divergence.studentSeq
-                      ? "2px solid var(--danger)"
-                      : "none",
-              }}
-            />
-          ))}
-        </div>
-        {current && (
-          <div className="mt-2 flex items-center gap-2">
-            <span
-              className="chip text-[10px]"
-              style={{ color: kindColor, borderColor: kindColor }}
-            >
-              {KIND_LABEL[current.kind] ?? current.kind}
-            </span>
-            <span className="mono text-xs" style={{ color: "var(--text)" }}>
-              {stepText}
-            </span>
-          </div>
-        )}
-        <div className="mt-2 hidden flex-wrap gap-2 sm:flex">
-          {Object.entries(KIND_LABEL)
-            .filter(([k], i, arr) => arr.findIndex(([, v]) => v === KIND_LABEL[k]) === i)
-            .map(([k, label]) => (
-              <span key={k} className="flex items-center gap-1 text-[10px]" style={{ color: "var(--muted)" }}>
-                <span className="inline-block h-2 w-2 rounded-[2px]" style={{ background: KIND_COLOR[k] }} />
-                {label}
+        <div className="timeline-legend">
+          <span>Timeline overview · {buckets.length} groups</span>
+          <div>
+            {["assign", "branch", "call", "line"].map((kind) => (
+              <span key={kind}>
+                <i style={{ background: COLORS[kind] }} />
+                {kind}
               </span>
             ))}
+          </div>
+        </div>
+        <div className="event-focus">
+          <span className="event-kind" style={{ color: COLORS[current?.kind ?? "line"] }}>
+            {current?.kind ?? "empty"}
+          </span>
+          <strong className="mono">{description}</strong>
+          <span className="chip">line {current?.line ?? "—"}</span>
         </div>
       </div>
-
-      {/* ---------- editors ---------- */}
-      <div className={`grid gap-4 ${hasRef && showRef ? "lg:grid-cols-2" : ""}`}>
-        <div className="panel overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
-            <span className="text-[13px] font-bold" style={{ color: "var(--accent)" }}>
-              {hasRef && showRef ? "A · your execution" : "Execution"}
-            </span>
-            <span className="mono text-xs" style={{ color: "var(--muted)" }}>
-              {current ? `line ${current.line}` : ""}
-            </span>
-          </div>
-          <CodeEditor value={studentSource} language={language} currentLine={current?.line ?? null} markerLine={divergence?.studentLine ?? null} height="300px" />
-        </div>
-        {hasRef && showRef && (
-          <div className="panel overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
-              <span className="text-[13px] font-bold" style={{ color: "var(--accent-2)" }}>B · reference execution</span>
-              <span className="mono text-xs" style={{ color: "var(--muted)" }}>
-                {referenceTrace!.events[refIdx] ? `line ${referenceTrace!.events[refIdx].line}` : ""}
-              </span>
+      {learn && <LearnStep event={current} previous={previous.variables} />}
+      {current?.kind === "branch" && (
+        <div className="panel branch-inspector">
+          <span className="eyebrow">RECORDED CONTROL FLOW</span>
+          <div className="branch-condition mono">{current.cond || "Condition"}</div>
+          <div className="branch-paths">
+            <div className={current.taken ? "taken" : ""}>
+              <strong>True</strong>
+              <span>{current.taken ? "Recorded outcome" : "Alternative outcome"}</span>
             </div>
-            <CodeEditor
-              value={referenceSource}
-              language={language}
-              currentLine={referenceTrace!.events[refIdx]?.line ?? null}
-              markerLine={divergence?.referenceLine ?? null}
-              height="300px"
-            />
+            <div className={!current.taken ? "taken false-path" : ""}>
+              <strong>False</strong>
+              <span>{!current.taken ? "Recorded outcome" : "Alternative outcome"}</span>
+            </div>
           </div>
-        )}
-      </div>
-
-      {/* ---------- state panels ---------- */}
-      <div className={`grid gap-4 ${hasRef && showRef ? "lg:grid-cols-4" : "lg:grid-cols-3"}`}>
-        <div className={`panel p-4 ${hasRef && showRef ? "lg:col-span-3" : "lg:col-span-2"}`}>
-          <h3 className="text-[13px] font-bold uppercase tracking-wide" style={{ color: "var(--muted)" }}>
-            Variables <span className="normal-case" style={{ fontWeight: 400 }}>— green = changed this step</span>
-          </h3>
-          <div className="mt-3 grid gap-2.5">
-            {variables.size === 0 && (
-              <p className="text-xs" style={{ color: "var(--muted)" }}>No assignments executed yet — press ▶ or → to step.</p>
-            )}
-            {[...variables.entries()].map(([name, value]) => (
-              <VariableRow
-                key={name}
-                name={name}
-                value={value}
-                prevValue={prevVars.get(name)}
-                changed={changed.has(name)}
-                variables={variables}
+          <p className="coverage-note">
+            Only the condition outcome is recorded here. The alternate path is a diagram of the decision, not
+            an executed trace.
+          </p>
+        </div>
+      )}
+      {hasReference && (
+        <div className="reference-control">
+          <label className="toggle-label">
+            <input
+              type="checkbox"
+              checked={showReference}
+              onChange={(e) => setShowReference(e.target.checked)}
+            />
+            Compare reference state
+          </label>
+          <label className="toggle-label">
+            <input
+              type="checkbox"
+              checked={referenceCursor === null}
+              onChange={(e) => setReferenceCursor(e.target.checked ? null : alignedReference)}
+            />
+            Follow recorded alignment
+          </label>
+          {referenceCursor !== null && (
+            <label className="reference-scrubber">
+              Reference step {refIndex + 1}
+              <input
+                type="range"
+                aria-label="Reference execution step"
+                min={0}
+                max={Math.max(0, (refEvents?.length ?? 1) - 1)}
+                value={refIndex}
+                onChange={(e) => setReferenceCursor(Number(e.target.value))}
               />
-            ))}
-          </div>
-        </div>
-
-        <div className="panel p-4">
-          <h3 className="text-[13px] font-bold uppercase tracking-wide" style={{ color: "var(--muted)" }}>
-            Call stack
-          </h3>
-          <div className="mt-3 grid gap-1">
-            {callStack.length === 0 && (
-              <p className="text-xs" style={{ color: "var(--muted)" }}>Top-level scope.</p>
-            )}
-            {[...callStack].reverse().map((fn, i) => (
-              <div
-                key={`${fn}-${i}`}
-                className="mono rounded-md px-2 py-1 text-[13px]"
-                style={{
-                  background: i === 0 ? "color-mix(in srgb, var(--accent-2) 14%, transparent)" : "var(--panel-2)",
-                  marginLeft: `${i * 10}px`,
-                }}
-              >
-                {fn}()
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ---------- program output ---------- */}
-      {output !== null && output !== "" && (
-        <div className="panel p-4">
-          <h3 className="text-[13px] font-bold uppercase tracking-wide" style={{ color: "var(--muted)" }}>
-            Program output (stdout)
-          </h3>
-          <pre className="mono scroll-thin mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg p-3 text-xs leading-relaxed" style={{ background: "var(--panel-2)" }}>
-            {output}
-          </pre>
+            </label>
+          )}
+          {referenceCursor === null && divergence && index > divergence.studentSeq && (
+            <p className="coverage-note">
+              Alignment ends at the first difference. Unlink the reference to explore its later steps
+              independently.
+            </p>
+          )}
         </div>
       )}
-    </div>
-  );
-}
-
-/* ---------------- variable rendering ---------------- */
-
-function VariableRow({
-  name,
-  value,
-  prevValue,
-  changed,
-  variables,
-}: {
-  name: string;
-  value: string;
-  prevValue: string | undefined;
-  changed: boolean;
-  variables: Map<string, string>;
-}) {
-  const parsed = parseValue(value);
-
-  return (
-    <div
-      className="rounded-lg px-2 py-1.5 transition-colors duration-300"
-      style={{ background: changed ? "color-mix(in srgb, var(--accent-2) 10%, transparent)" : "transparent" }}
-    >
-      <div className="mono flex flex-wrap items-baseline gap-x-2 text-[13px]">
-        <span style={{ color: "var(--accent)" }}>{name}</span>
-        {changed && prevValue !== undefined && (
-          <span className="text-[11px] line-through" style={{ color: "var(--muted)" }}>{prevValue}</span>
-        )}
-        <span className="font-semibold" style={{ color: changed ? "var(--accent-2)" : "var(--text)" }}>
-          {parsed.kind === "array" ? `[${parsed.cells.length}]` : parsed.kind === "grid" ? "matrix" : parsed.kind === "string" ? `"${parsed.chars}"` : parsed.text}
-        </span>
-        {changed && <span className="text-[10px] font-bold uppercase" style={{ color: "var(--accent-2)" }}>changed</span>}
-      </div>
-
-      {parsed.kind === "array" && parsed.cells.length > 0 && (
-        <ArrayViz cells={parsed.cells} numbers={parsed.numbers} markers={MARKER_VARS.has(name) ? collectMarkers(variables) : []} />
-      )}
-      {parsed.kind === "grid" && <GridViz rows={parsed.rows} />}
-      {parsed.kind === "string" && parsed.chars.length > 0 && parsed.chars.length <= 60 && (
-        <div className="scroll-thin mt-1 flex overflow-x-auto">
-          {parsed.chars.split("").map((c, i) => (
-            <div key={i} className="mono mr-[3px] rounded border px-1.5 py-0.5 text-xs" style={{ borderColor: "var(--border)", background: "var(--panel-2)" }}>
-              {c === " " ? "␣" : c}
+      <VisualBoundary key={studentTrace.meta.testId}>
+        <ExecutionCanvas
+          variables={state.variables}
+          previous={previous.variables}
+          reference={hasReference && showReference ? refState.variables : undefined}
+          stack={state.stack}
+          histories={stateIndex.histories}
+          index={index}
+          onSeek={seek}
+        />
+      </VisualBoundary>
+      <div className="panel source-replay">
+        <button className="disclosure" aria-expanded={showSource} onClick={() => setShowSource(!showSource)}>
+          <Icon name="code" />
+          <strong>Source at this step</strong>
+          <span className="muted">{showSource ? "Hide" : "Show"} source</span>
+        </button>
+        {showSource && (
+          <div className={`source-panels ${hasReference && showReference ? "compare" : ""}`}>
+            <div>
+              <div className="editor-title">YOUR EXECUTION · line {current?.line ?? "—"}</div>
+              <CodeEditor
+                value={studentSource}
+                language={language}
+                currentLine={current?.line}
+                markerLine={divergence?.studentLine}
+                height="300px"
+              />
             </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function collectMarkers(variables: Map<string, string>): Array<{ name: string; index: number | null }> {
-  const out: Array<{ name: string; index: number | null }> = [];
-  for (const [name, value] of variables) {
-    if (!MARKER_VARS.has(name)) continue;
-    const v = parseValue(value);
-    if (v.kind !== "scalar") continue;
-    const n = /^-?\d+$/.test(v.text) ? Number(v.text) : null;
-    out.push({ name, index: n });
-  }
-  return out;
-}
-
-function ArrayViz({
-  cells,
-  numbers,
-  markers,
-}: {
-  cells: string[];
-  numbers: number[] | null;
-  markers: Array<{ name: string; index: number | null }>;
-}) {
-  if (cells.length > 40) {
-    return (
-      <div className="mono mt-1 text-xs" style={{ color: "var(--muted)" }}>
-        [{cells.length} elements — first 40 shown]
-      </div>
-    );
-  }
-  const maxAbs = numbers ? Math.max(1, ...numbers.map((n) => Math.abs(n))) : 1;
-  return (
-    <div className="scroll-thin mt-1.5 flex items-end gap-[3px] overflow-x-auto pb-1">
-      {cells.map((cell, i) => {
-        const marker = markers.find((m) => m.index === i);
-        const num = numbers?.[i] ?? null;
-        const h = num !== null ? Math.max(6, Math.round((Math.abs(num) / maxAbs) * 34)) : null;
-        return (
-          <div key={i} className="shrink-0 text-center">
-            {marker && (
-              <div className="mono text-[10px] font-bold leading-3" style={{ color: "var(--accent-2)" }}>
-                ↑{marker.name}
-              </div>
-            )}
-            <div className="flex h-[36px] items-end">
-              {h !== null && (
-                <div
-                  className="w-full rounded-t-[3px] transition-all duration-200"
-                  style={{
-                    height: `${h}px`,
-                    background: marker ? "var(--accent-2)" : "color-mix(in srgb, var(--accent) 65%, transparent)",
-                  }}
+            {hasReference && showReference && (
+              <div>
+                <div className="editor-title">REFERENCE · line {refEvents?.[refIndex]?.line ?? "—"}</div>
+                <CodeEditor
+                  value={referenceSource}
+                  language={language}
+                  currentLine={refEvents?.[refIndex]?.line}
+                  height="300px"
                 />
-              )}
-            </div>
-            <div
-              className="mono rounded-md border px-1.5 py-0.5 text-[11px] transition-colors duration-200"
-              style={{
-                borderColor: marker ? "var(--accent-2)" : "var(--border)",
-                background: marker ? "color-mix(in srgb, var(--accent-2) 14%, transparent)" : "var(--panel-2)",
-                minWidth: "30px",
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <details className="panel event-log">
+        <summary>Event log · search the captured execution</summary>
+        <div className="event-search">
+          <label>
+            Search
+            <input
+              type="search"
+              aria-label="Search events by variable, value or line"
+              placeholder="Variable, value, line…"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setPage(0);
+              }}
+            />
+          </label>
+          <label>
+            Type
+            <select
+              aria-label="Event type"
+              value={filter}
+              onChange={(e) => {
+                setFilter(e.target.value);
+                setPage(0);
               }}
             >
-              {cell}
-            </div>
-            <div className="text-[9px]" style={{ color: "var(--muted)" }}>{i}</div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function GridViz({ rows }: { rows: string[][] }) {
-  if (rows.length > 15 || rows.some((r) => r.length > 15)) {
-    return <div className="mono mt-1 text-xs" style={{ color: "var(--muted)" }}>{rows.length}×{rows[0]?.length ?? 0} matrix</div>;
-  }
-  return (
-    <div className="mt-1.5 inline-block">
-      {rows.map((row, ri) => (
-        <div key={ri} className="flex gap-[3px] pb-[3px]">
-          {row.map((cell, ci) => (
-            <div
-              key={ci}
-              className="mono rounded border px-1.5 py-0.5 text-center text-[11px]"
-              style={{ borderColor: "var(--border)", background: "var(--panel-2)", minWidth: "32px" }}
+              <option value="all">All events</option>
+              {Object.keys(COLORS).map((kind) => (
+                <option key={kind}>{kind}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="event-rows">
+          {rows.slice(rowPage * 30, rowPage * 30 + 30).map(({ event, i }) => (
+            <button
+              key={i}
+              className={`event-row ${i === index ? "selected" : ""}`}
+              onClick={() => seek(i)}
+              aria-label={`Step ${i + 1}, ${event.kind}, line ${event.line}`}
             >
-              {cell}
-            </div>
+              <span className="mono">{i + 1}</span>
+              <span style={{ color: COLORS[event.kind] }}>{event.kind}</span>
+              <span className="mono">
+                {event.name ? `${event.name} = ${event.value}` : (event.cond ?? event.fn ?? "statement")}
+              </span>
+              <span>line {event.line}</span>
+            </button>
           ))}
         </div>
-      ))}
-      <div className="text-[9px]" style={{ color: "var(--muted)" }}>
-        {rows.length}×{rows[0]?.length ?? 0}
-      </div>
-    </div>
+        {!rows.length && <p className="muted">No matching events.</p>}
+        <div className="pagination">
+          <button className="btn" disabled={rowPage === 0} onClick={() => setPage(rowPage - 1)}>
+            Previous
+          </button>
+          <span>
+            {rows.length} events · page {rowPage + 1} of {Math.max(1, Math.ceil(rows.length / 30))}
+          </span>
+          <button
+            className="btn"
+            disabled={(rowPage + 1) * 30 >= rows.length}
+            onClick={() => setPage(rowPage + 1)}
+          >
+            Next
+          </button>
+        </div>
+      </details>
+      {output !== undefined && output !== null && (
+        <div className="panel output-console">
+          <div className="section-heading">
+            <h3>Program output</h3>
+            <span className="chip">stdout</span>
+          </div>
+          <pre className="mono">{output || "(no output)"}</pre>
+        </div>
+      )}
+      <p className="coverage-note">
+        Replay shows supported recorded events. Uncaptured operations and truncated state are not
+        reconstructed.
+      </p>
+    </section>
   );
 }

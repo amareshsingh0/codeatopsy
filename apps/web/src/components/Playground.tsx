@@ -1,19 +1,25 @@
 "use client";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { LANGUAGE_LABEL, type Language, type Submission } from "@codeautopsy/schemas";
-import { alignTraces } from "@codeautopsy/trace-core";
+import { useMemo, useState } from "react";
+import { LANGUAGE_LABEL, type Language } from "@codeautopsy/schemas";
 import { TraceViewer } from "./TraceViewer";
 import { Report } from "./Report";
+import { useSubmission } from "./useSubmission";
+import { ExecutionDetails } from "./ExecutionDetails";
+import { RunProgress } from "./RunProgress";
+import { Icon } from "./Icon";
+import { getDiagnostics } from "@/lib/diagnostics";
+import { SystemStatus } from "./SystemStatus";
+import type { LearningExample } from "@/lib/examples";
 
 const ClientCodeEditor = dynamic(() => import("./CodeEditor").then((m) => m.CodeEditor), { ssr: false });
 
-
-const STARTERS: Record<Language, string> = {  cpp: `#include <bits/stdc++.h>
+const STARTERS: Record<Language, string> = {
+  cpp: `#include <bits/stdc++.h>
 using namespace std;
 
-// Koi bhi C++ code — har assignment, branch aur call record hoti hai.
+// Maximum subarray example. Try an all-negative input to investigate it.
 int main() {
     int n;
     cin >> n;
@@ -31,7 +37,7 @@ int main() {
 `,
   c: `#include <stdio.h>
 
-// Koi bhi C code
+// C execution example. Trace coverage depends on supported instrumentation.
 int main() {
     int n;
     if (scanf("%d", &n) != 1) return 0;
@@ -47,7 +53,7 @@ int main() {
     return 0;
 }
 `,
-  python: `# Koi bhi Python code — sys.settrace se har step record hota hai.
+  python: `# Python execution example with recorded variable snapshots.
 n = int(input())
 a = [int(x) for x in input().split()]
 
@@ -58,7 +64,7 @@ for x in a:
     best = max(best, cur)
 print(best)
 `,
-  javascript: `// Koi bhi JavaScript (Node) code
+  javascript: `// JavaScript execution example using Node.js standard input.
 let input = "";
 process.stdin.on("data", (d) => (input += d));
 process.stdin.on("end", () => {
@@ -77,7 +83,7 @@ process.stdin.on("end", () => {
 `,
   java: `import java.util.*;
 
-// Koi bhi Java code (public class ka naam Main rakho)
+// Java execution example. The public class must be named Main.
 public class Main {
     public static void main(String[] args) {
         Scanner sc = new Scanner(System.in);
@@ -109,73 +115,25 @@ const DEFAULT_INPUTS: Record<Language, string> = {
 
 const LANGUAGES: Language[] = ["cpp", "c", "python", "javascript", "java"];
 
-type Phase = "editing" | "running" | "done" | "error";
-
-export function Playground() {
-  const [language, setLanguage] = useState<Language>("cpp");
-  const [source, setSource] = useState(STARTERS.cpp);
-  const [input, setInput] = useState(DEFAULT_INPUTS.cpp);
-  const [expectedOutput, setExpectedOutput] = useState("");
-  const [phase, setPhase] = useState<Phase>("editing");
-  const [submission, setSubmission] = useState<Submission | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(
-    () => () => {
-      if (pollTimer.current) clearTimeout(pollTimer.current);
-    },
-    [],
-  );
-
+export function Playground({ example }: { example?: LearningExample }) {
+  const [language, setLanguage] = useState<Language>(example?.language ?? "cpp");
+  const [source, setSource] = useState(example?.source ?? STARTERS.cpp);
+  const [input, setInput] = useState(example ? "" : DEFAULT_INPUTS.cpp);
+  const [expectedOutput, setExpectedOutput] = useState(example?.expectedOutput ?? "");
+  const { phase, submission, error, submit: runSubmission, reset, stop } = useSubmission();
+  const [diagnosticLine, setDiagnosticLine] = useState<number | null>(null);
   const switchLanguage = (lang: Language) => {
+    reset();
     setLanguage(lang);
     setSource(STARTERS[lang]);
     setInput(DEFAULT_INPUTS[lang]);
-    setSubmission(null);
-    setError(null);
-    setPhase("editing");
+    setExpectedOutput("");
+    setDiagnosticLine(null);
   };
-
-  const submit = useCallback(async () => {
-    setPhase("running");
-    setError(null);
-    setSubmission(null);
-    try {
-      const res = await fetch("/api/submissions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ problemId: "playground", source, input, expectedOutput, language }),
-      });
-      const body = (await res.json()) as { id?: string; error?: string };
-      if (!res.ok || !body.id) throw new Error(body.error ?? `submit failed (${res.status})`);
-      poll(body.id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setPhase("error");
-    }
-  }, [source, input, expectedOutput, language]);
-
-  const poll = useCallback((id: string) => {
-    const tick = async () => {
-      try {
-        const res = await fetch(`/api/submissions/${id}`, { cache: "no-store" });
-        if (!res.ok) throw new Error(`poll failed (${res.status})`);
-        const sub = (await res.json()) as Submission;
-        setSubmission(sub);
-        if (sub.status === "completed" || sub.status === "failed") {
-          setPhase("done");
-          return;
-        }
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-        setPhase("error");
-        return;
-      }
-      pollTimer.current = setTimeout(tick, 1200);
-    };
-    pollTimer.current = setTimeout(tick, 800);
-  }, []);
+  const submit = () => {
+    setDiagnosticLine(null);
+    void runSubmission({ problemId: "playground", source, input, expectedOutput, language });
+  };
 
   const result = submission?.result ?? null;
   const verdict = result?.verdicts[0] ?? null;
@@ -190,20 +148,35 @@ export function Playground() {
   return (
     <div className="grid gap-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold">Playground 🔬</h1>
+        <div className="workspace-heading">
+          <span className="eyebrow">YOUR EXECUTION LAB</span>
+          <h1>From source to understanding.</h1>
           <p className="mt-0.5 text-[13px]" style={{ color: "var(--muted)" }}>
-            C++, C, Python, JavaScript ya Java — apna code + stdin do, har step trace hota hai.
+            Run C++, C, Python, JavaScript or Java with your own input. Tracing is available for C++, Python,
+            JavaScript and compatible C programs; Java currently returns output and verdicts.
           </p>
+          <SystemStatus />
+          {example && (
+            <div className="example-question">
+              <span className="eyebrow">{example.title}</span>
+              <p>{example.question}</p>
+              <Link href="/atlas">Choose another concept →</Link>
+            </div>
+          )}
         </div>
-        <Link href="/" className="btn">← Problem library</Link>
+        <Link href="/" className="btn">
+          ← Problem library
+        </Link>
       </div>
 
       <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
         {/* left: code */}
         <div className="grid content-start gap-4">
           <div className="panel overflow-hidden">
-            <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2" style={{ borderBottom: "1px solid var(--border)" }}>
+            <div
+              className="flex flex-wrap items-center justify-between gap-2 px-4 py-2"
+              style={{ borderBottom: "1px solid var(--border)" }}
+            >
               <div className="flex items-center gap-2">
                 <select
                   className="mono rounded-md border bg-transparent px-2 py-1 text-xs"
@@ -211,17 +184,29 @@ export function Playground() {
                   value={language}
                   onChange={(e) => switchLanguage(e.target.value as Language)}
                   aria-label="Language"
+                  disabled={phase === "running"}
                 >
                   {LANGUAGES.map((l) => (
-                    <option key={l} value={l}>{LANGUAGE_LABEL[l]}</option>
+                    <option key={l} value={l}>
+                      {LANGUAGE_LABEL[l]}
+                    </option>
                   ))}
                 </select>
                 <span className="mono text-xs" style={{ color: "var(--muted)" }}>
-                  {language === "cpp" || language === "c" ? "main.cpp" : language === "python" ? "main.py" : language === "java" ? "Main.java" : "main.js"}
+                  {language === "cpp"
+                    ? "main.cpp"
+                    : language === "c"
+                      ? "main.c"
+                      : language === "python"
+                        ? "main.py"
+                        : language === "java"
+                          ? "Main.java"
+                          : "main.js"}
                 </span>
               </div>
               <button className="btn btn-primary" onClick={submit} disabled={phase === "running"}>
-                {phase === "running" ? "Running…" : "▶ Trace it"}
+                <Icon name="play" />
+                {phase === "running" ? "Running…" : "Run & inspect"}
               </button>
             </div>
             <ClientCodeEditor
@@ -230,23 +215,32 @@ export function Playground() {
               onChange={setSource}
               language={language}
               height="380px"
-              readOnly={false}
+              readOnly={phase === "running"}
+              markerLine={
+                source === submission?.source
+                  ? (diagnosticLine ?? (result ? getDiagnostics(result).find((d) => d.line)?.line : null))
+                  : null
+              }
+              currentLine={source === submission?.source ? diagnosticLine : null}
             />
+            <div className="editor-note">
+              Original source determines the verdict. Replay uses a separate instrumented run; unsupported
+              trace operations are reported.
+            </div>
           </div>
 
-          {phase === "running" && (
-            <div className="panel p-4 text-[13px]">
-              <span className="mr-2 inline-block h-2 w-2 animate-pulse rounded-full" style={{ background: "var(--accent)" }} />
-              {submission?.status ?? "queued"}…
-            </div>
-          )}
+          {phase === "running" && <RunProgress status={submission?.status} onStop={stop} />}
           {error && (
-            <div className="panel p-4 text-[13px]" style={{ borderColor: "var(--danger)" }}>⚠ {error}</div>
+            <div className="panel diagnostic" role="alert">
+              <strong>Run could not complete</strong>
+              <p>{error}</p>
+            </div>
           )}
 
           {viewerData && (
             <TraceViewer
-              studentSource={source}
+              studentSource={submission?.source ?? source}
+              language={result?.language ?? language}
               referenceSource=""
               studentTrace={viewerData.trace}
               output={viewerData.output}
@@ -257,10 +251,16 @@ export function Playground() {
         {/* right: io + report */}
         <div className="grid content-start gap-4">
           <div className="panel p-4">
-            <label className="text-[13px] font-bold uppercase tracking-wide" style={{ color: "var(--muted)" }}>
+            <label
+              htmlFor="program-input"
+              className="text-[13px] font-bold uppercase tracking-wide"
+              style={{ color: "var(--muted)" }}
+            >
               stdin
             </label>
             <textarea
+              id="program-input"
+              disabled={phase === "running"}
               className="mono scroll-thin mt-2 h-36 w-full resize-y rounded-lg border p-2.5 text-xs"
               style={{ background: "var(--panel-2)", borderColor: "var(--border)", color: "var(--text)" }}
               value={input}
@@ -270,10 +270,19 @@ export function Playground() {
             />
           </div>
           <div className="panel p-4">
-            <label className="text-[13px] font-bold uppercase tracking-wide" style={{ color: "var(--muted)" }}>
-              expected output <span className="normal-case" style={{ fontWeight: 400 }}>(optional)</span>
+            <label
+              htmlFor="expected-output"
+              className="text-[13px] font-bold uppercase tracking-wide"
+              style={{ color: "var(--muted)" }}
+            >
+              expected output{" "}
+              <span className="normal-case" style={{ fontWeight: 400 }}>
+                (optional)
+              </span>
             </label>
             <textarea
+              id="expected-output"
+              disabled={phase === "running"}
               className="mono scroll-thin mt-2 h-24 w-full resize-y rounded-lg border p-2.5 text-xs"
               style={{ background: "var(--panel-2)", borderColor: "var(--border)", color: "var(--text)" }}
               value={expectedOutput}
@@ -299,19 +308,25 @@ export function Playground() {
                           ? "⏱ time limit"
                           : "💥 runtime error"}
                   </span>
-                  <span className="mono text-[11px]" style={{ color: "var(--muted)" }}>{verdict.durationMs} ms</span>
+                  <span className="mono text-[11px]" style={{ color: "var(--muted)" }}>
+                    {verdict.durationMs} ms
+                  </span>
                 </div>
                 {verdict.detail && (
-                  <span className="mono text-[11px]" style={{ color: "var(--muted)" }}>{verdict.detail}</span>
+                  <span className="mono text-[11px]" style={{ color: "var(--muted)" }}>
+                    {verdict.detail}
+                  </span>
                 )}
               </div>
             )}
           </div>
 
+          {result && (
+            <ExecutionDetails result={result} showOutput={!viewerData} onInspectLine={setDiagnosticLine} />
+          )}
           {result?.report && <Report report={result.report} />}
         </div>
       </div>
     </div>
   );
 }
-

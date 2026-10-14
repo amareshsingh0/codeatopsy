@@ -1,5 +1,6 @@
-import { pgTable, text, timestamp, jsonb } from "drizzle-orm/pg-core";
-import type { ExecutionResult } from "@codeautopsy/schemas";
+import { pgTable, text, timestamp, jsonb, integer, index, check } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import type { ExecutionResult, JobRequest } from "@codeautopsy/schemas";
 
 export const submissions = pgTable("submissions", {
   id: text("id").primaryKey(),
@@ -13,3 +14,36 @@ export const submissions = pgTable("submissions", {
 });
 
 export type SubmissionRow = typeof submissions.$inferSelect;
+
+// Keep the schema catalog consistent with the deployment SQL migration.
+export const executionJobs = pgTable(
+  "execution_jobs",
+  {
+    id: text("id").primaryKey(),
+    fingerprint: text("fingerprint").notNull(),
+    payload: jsonb("payload").$type<JobRequest>().notNull(),
+    status: text("status").notNull().default("queued"),
+    result: jsonb("result").$type<ExecutionResult | null>(),
+    error: text("error"),
+    attempts: integer("attempts").notNull().default(0),
+    leaseToken: text("lease_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (table) => [
+    check(
+      "execution_jobs_status_check",
+      sql`${table.status} in ('queued', 'running', 'completed', 'failed')`,
+    ),
+    index("execution_jobs_claim_idx")
+      .on(table.createdAt)
+      .where(sql`${table.status} in ('queued', 'running')`),
+    index("execution_jobs_expiry_idx")
+      .on(table.leaseUntil)
+      .where(sql`${table.status} = 'running'`),
+    index("execution_jobs_retention_idx")
+      .on(table.completedAt)
+      .where(sql`${table.completedAt} is not null`),
+  ],
+);
