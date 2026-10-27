@@ -1,8 +1,10 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": ["DATABASE_URL", "AUTOPSY_NODE_SECRET", "VERCEL_*"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
+      "env": ["AUTOPSY_EXECUTION_PROVIDER", "AUTOPSY_SANDBOX_SNAPSHOT_ID"],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
     "dev": {

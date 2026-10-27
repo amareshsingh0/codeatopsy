@@ -36,3 +36,4 @@ Thumbs.db
 .vercel
 apps/web/public/visuals/*.png
 .env*
+**/*.cookies

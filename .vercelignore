@@ -4,6 +4,7 @@ node_modules
 **/.turbo
 .next
 **/.next
+**/dist
 .data
 .vercel
 **/.next-local-*

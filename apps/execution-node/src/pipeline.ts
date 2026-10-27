@@ -20,6 +20,7 @@ import { alignTraces } from "@codeautopsy/trace-core";
 import { buildReport } from "@codeautopsy/explanation";
 import type { Sandbox, RunResult } from "./sandbox";
 import { createSandbox } from "./sandbox";
+import { boundResultPreviews } from "./result-budget";
 
 const here = (() => {
   try {
@@ -104,13 +105,13 @@ export async function processJob(job: JobRequest): Promise<ExecutionResult> {
   try {
     switch (language) {
       case "python":
-        return await runPythonPipeline(job, sandbox);
+        return boundResultPreviews(await runPythonPipeline(job, sandbox));
       case "javascript":
-        return await runJsPipeline(job, sandbox);
+        return boundResultPreviews(await runJsPipeline(job, sandbox));
       case "java":
-        return await runJavaPipeline(job, sandbox);
+        return boundResultPreviews(await runJavaPipeline(job, sandbox));
       default:
-        return await runCppPipeline(job, sandbox);
+        return boundResultPreviews(await runCppPipeline(job, sandbox));
     }
   } finally {
     try {
@@ -125,11 +126,17 @@ export async function processJob(job: JobRequest): Promise<ExecutionResult> {
 /* shared tail: trace parsing, alignment, report                       */
 /* ------------------------------------------------------------------ */
 
+const traceBudgets = new WeakMap<Sandbox, { bytes: number; events: number }>();
 function readTraceFile(sandbox: Sandbox, file: string, meta: Trace["meta"]): Trace | null {
   try {
-    const path = sandbox.kind === "docker" ? join(sandbox.dir, "traces", file) : join(sandbox.dir, file);
+    const path = sandbox.kind !== "local" ? join(sandbox.dir, "traces", file) : join(sandbox.dir, file);
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024 * 1024) return null;
+    const budget = traceBudgets.get(sandbox) ?? { bytes: 16 * 1024 * 1024, events: 20000 };
+    traceBudgets.set(sandbox, budget);
+    if (stat.size > budget.bytes || budget.events === 0)
+      return { meta: { ...meta, truncated: true }, events: [] };
+    budget.bytes -= stat.size;
     const raw = readFileSync(path, "utf8");
     let truncated = false;
     const filtered: string[] = [];
@@ -147,6 +154,11 @@ function readTraceFile(sandbox: Sandbox, file: string, meta: Trace["meta"]): Tra
       filtered.push(t);
     }
     const { trace } = parseTraceJsonl(filtered.join("\n"), { ...meta, truncated });
+    if (trace.events.length > budget.events) {
+      trace.events = trace.events.slice(0, budget.events);
+      trace.meta.truncated = true;
+    }
+    budget.events -= trace.events.length;
     return trace.events.length ? trace : null;
   } catch {
     return null;
@@ -319,7 +331,7 @@ async function traceCppRun(
 /* ------------------------------------------------------------------ */
 
 function pythonBin(sandbox: Sandbox): string {
-  return sandbox.kind === "docker"
+  return sandbox.kind !== "local"
     ? "python3"
     : process.env.AUTOPSY_PYTHON || (process.platform === "win32" ? "python" : "python3");
 }
@@ -415,7 +427,7 @@ async function tracePythonRun(
 /* ------------------------------------------------------------------ */
 
 function nodeBin(sandbox: Sandbox): string {
-  return sandbox.kind === "docker" ? "node" : process.env.AUTOPSY_NODE || process.execPath;
+  return sandbox.kind !== "local" ? "node" : process.env.AUTOPSY_NODE || process.execPath;
 }
 
 async function runJsPipeline(job: JobRequest, sandbox: Sandbox): Promise<ExecutionResult> {
@@ -542,7 +554,7 @@ async function runJavaPipeline(job: JobRequest, sandbox: Sandbox): Promise<Execu
 
   for (const test of problem.tests) {
     const run = await sandbox.exec(
-      [sandbox.kind === "docker" ? "java" : process.env.AUTOPSY_JAVA || "java", file],
+      [sandbox.kind !== "local" ? "java" : process.env.AUTOPSY_JAVA || "java", file],
       {
         input: test.input,
         timeoutMs: problem.timeLimitMs + 2000, // JVM startup

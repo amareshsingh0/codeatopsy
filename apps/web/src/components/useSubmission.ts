@@ -34,7 +34,7 @@ export function useSubmission() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
-        signal: AbortSignal.any([current.signal, AbortSignal.timeout(15000)]),
+        signal: AbortSignal.any([current.signal, AbortSignal.timeout(90000)]),
       });
       const body = (await response.json()) as { id?: string; error?: string };
       if (!response.ok || !body.id) throw new Error(body.error ?? `Submit failed (${response.status})`);
@@ -46,7 +46,7 @@ export function useSubmission() {
         try {
           const res = await fetch(`/api/submissions/${encodeURIComponent(body.id)}`, {
             cache: "no-store",
-            signal: AbortSignal.any([current.signal, AbortSignal.timeout(10000)]),
+            signal: AbortSignal.any([current.signal, AbortSignal.timeout(90000)]),
           });
           if (!res.ok) {
             const message = (await res.json()) as { error?: string };

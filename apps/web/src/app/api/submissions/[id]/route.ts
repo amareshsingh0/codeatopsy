@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
-import { getStore } from "@codeautopsy/db";
+import { getStore, getSandboxJobs } from "@codeautopsy/db";
 import { pollExecution } from "@/lib/dispatch";
 import { configurationIssue } from "@/lib/readiness";
+import { protectedSubmissions, submissionSession } from "@/lib/submission-access";
+export const maxDuration = 90;
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const issue = configurationIssue();
@@ -10,6 +12,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   let store;
   let submission;
   try {
+    if (protectedSubmissions()) {
+      const session = submissionSession(_req);
+      if (!session.valid || !(await getSandboxJobs().owns(id, session.ownerHash)))
+        return NextResponse.json({ error: "unknown submission" }, { status: 404 });
+    }
     store = getStore();
     submission = await store.get(id);
   } catch {

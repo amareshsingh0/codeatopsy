@@ -39,7 +39,11 @@ export async function temporaryPostgres() {
       const child = spawn(program, args, { windowsHide: true, stdio: "ignore" });
       const timer = setTimeout(() => {
         child.kill();
-        reject(new Error("Temporary Postgres lifecycle command exceeded its budget"));
+        reject(
+          new Error(
+            `Temporary Postgres ${program.endsWith("initdb.exe") || program.endsWith("initdb") ? "initialization" : "control"} command exceeded its budget`,
+          ),
+        );
       }, timeout);
       child.once("error", (error) => {
         clearTimeout(timer);
@@ -75,8 +79,9 @@ export async function temporaryPostgres() {
         `--pwfile=${passwordFile}`,
         "--encoding=UTF8",
         "--locale=C",
+        "--no-sync", // Disposable fixtures only; avoid slow durable disk flushes in tests.
       ],
-      30000,
+      60000,
     );
     await unlink(passwordFile);
     await run(binaries.pg_ctl, [

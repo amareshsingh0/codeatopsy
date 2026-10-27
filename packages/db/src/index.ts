@@ -260,3 +260,5 @@ export function emptyFailure(error: string): ExecutionResult {
 export { FileStore, PgStore };
 export { PostgresJobQueue, QueueCapacityError, JobConflictError } from "./job-queue";
 export type { DurableJob, JobLease } from "./job-queue";
+export { SandboxJobs, getSandboxJobs, AdmissionLimit } from "./sandbox-jobs";
+export { applyPrivateMigration } from "./migrate";

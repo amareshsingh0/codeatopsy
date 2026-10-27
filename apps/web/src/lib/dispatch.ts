@@ -7,12 +7,17 @@ import {
   type SubmissionStatus,
 } from "@codeautopsy/schemas";
 import type { Problem } from "@codeautopsy/schemas";
+import { executionProvider, publicExecutionError } from "./execution-provider";
 
 export const EXECUTION_NODE_URL = process.env.EXECUTION_NODE_URL ?? "http://127.0.0.1:8787";
 const SECRET = process.env.AUTOPSY_NODE_SECRET;
 
 /** Polling is also the recovery path when a callback is absent or lost. */
 export async function pollExecution(jobId: string) {
+  if (executionProvider() === "vercel") {
+    const { pollSandboxJob } = await import("./vercel-jobs");
+    return pollSandboxJob(jobId);
+  }
   const res = await fetch(`${EXECUTION_NODE_URL}/jobs/${encodeURIComponent(jobId)}`, {
     headers: SECRET ? { "x-autopsy-secret": SECRET } : {},
     cache: "no-store",
@@ -43,6 +48,11 @@ export async function dispatchExecution(
     autopsy: true,
   } satisfies JobRequest);
   try {
+    if (executionProvider() === "vercel") {
+      const { startSandboxJob } = await import("./vercel-jobs");
+      await startSandboxJob(jobId);
+      return { ok: true };
+    }
     const res = await fetch(`${EXECUTION_NODE_URL}/jobs`, {
       method: "POST",
       headers: {
@@ -59,7 +69,7 @@ export async function dispatchExecution(
   } catch (err) {
     return {
       ok: false,
-      error: "Execution service could not be reached. Check the worker configuration or retry shortly.",
+      error: publicExecutionError(err),
     };
   }
 }

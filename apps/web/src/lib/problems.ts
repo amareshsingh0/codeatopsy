@@ -23,7 +23,12 @@ function readProblem(slug: string): Problem | null {
     >;
     const referenceSource = readFileSync(join(dir, "reference.cpp"), "utf8");
     const studentSource = readFileSync(join(dir, "student.cpp"), "utf8");
-    return Problem.parse({ ...meta, referenceSource, studentSource });
+    return Problem.parse({
+      ...meta,
+      referenceSource,
+      studentSource,
+      ...(process.env.AUTOPSY_EXECUTION_PROVIDER === "vercel" ? { memoryLimitMb: 2048 } : {}),
+    });
   } catch (err) {
     console.error(`[problems] failed to load "${slug}":`, err);
     return null;

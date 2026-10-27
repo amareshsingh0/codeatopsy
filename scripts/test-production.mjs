@@ -70,8 +70,8 @@ async function ready(url, options = {}) {
 }
 try {
   const url = database.url;
-  sql = postgres(url, { prepare: false });
-  await sql.unsafe(await readFile(join(root, "packages/db/migrations/001_execution_jobs.sql"), "utf8"));
+  sql = postgres(url, { prepare: false, max: 1 });
+  await sql.unsafe(await readFile(join(root, "packages/db/migrations/002_codeautopsy_private.sql"), "utf8"));
   const env = {
     NODE_ENV: "production",
     DATABASE_URL: url,
@@ -106,7 +106,8 @@ try {
     console.error(web.logs());
     throw new Error("Production HTTP smoke failed");
   }
-  const [count] = await sql`select count(*)::int as count from submissions where status = 'completed'`;
+  const [count] =
+    await sql`select count(*)::int as count from codeautopsy.submissions where status = 'completed'`;
   if (count.count < 8) throw new Error("Durable results were not persisted");
   console.log(
     `[production smoke] ${count.count} completed results persisted in Postgres through the durable worker queue`,

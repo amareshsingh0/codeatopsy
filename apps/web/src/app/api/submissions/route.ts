@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
-import { getStore } from "@codeautopsy/db";
-import { Problem, SubmissionRequest } from "@codeautopsy/schemas";
+import { getStore, getSandboxJobs, AdmissionLimit } from "@codeautopsy/db";
+import { Problem, JobRequest, SubmissionRequest } from "@codeautopsy/schemas";
 import { getFullProblem } from "@/lib/problems";
 import { dispatchExecution } from "@/lib/dispatch";
 import { configurationIssue } from "@/lib/readiness";
+import { protectedSubmissions, submissionSession } from "@/lib/submission-access";
+export const maxDuration = 90;
 
 /**
  * POST /api/submissions
@@ -40,6 +42,7 @@ export async function POST(req: Request) {
       statement: "Custom submission executed with your own stdin input.",
       topics: ["custom"],
       language: language ?? "cpp",
+      ...(protectedSubmissions() ? { memoryLimitMb: 2048 } : {}),
       tests: [
         {
           id: "run-1",
@@ -70,21 +73,43 @@ export async function POST(req: Request) {
     );
   }
   const id = randomUUID();
+  const session = protectedSubmissions() ? submissionSession(req) : null;
   try {
-    await store.create({ id, problemId, source });
-  } catch {
+    if (session)
+      await getSandboxJobs().reserve(
+        JobRequest.parse({
+          jobId: id,
+          problem,
+          source,
+          ...(language ? { language } : {}),
+          autopsy: true,
+        }),
+        problemId,
+        session.ownerHash,
+        session.addressHash,
+      );
+    else await store.create({ id, problemId, source });
+  } catch (error) {
+    if (error instanceof AdmissionLimit)
+      return NextResponse.json({ error: error.message }, { status: 429, headers: { "Retry-After": "300" } });
     return NextResponse.json(
       { error: "Submission could not be saved. Retry when storage is available." },
       { status: 503 },
     );
   }
 
-  // fire-and-forget: the execution node calls back with the result
+  // The provider starts durable execution; polling independently recovers results.
   const dispatch = await dispatchExecution(id, problem, source, language);
   if (!dispatch.ok) {
     await store.fail(id, dispatch.error ?? "dispatch failed");
     return NextResponse.json({ id, status: "failed", error: dispatch.error }, { status: 502 });
   }
 
-  return NextResponse.json({ id, status: "queued" }, { status: 202 });
+  return NextResponse.json(
+    { id, status: "queued" },
+    {
+      status: 202,
+      headers: session ? { "Set-Cookie": session.cookie } : {},
+    },
+  );
 }

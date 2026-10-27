@@ -1,8 +1,10 @@
-import { pgTable, text, timestamp, jsonb, integer, index, check } from "drizzle-orm/pg-core";
+import { pgSchema, text, timestamp, jsonb, integer, index, check } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { ExecutionResult, JobRequest } from "@codeautopsy/schemas";
 
-export const submissions = pgTable("submissions", {
+const application = pgSchema("codeautopsy");
+
+export const submissions = application.table("submissions", {
   id: text("id").primaryKey(),
   problemId: text("problem_id").notNull(),
   source: text("source").notNull(),
@@ -16,7 +18,7 @@ export const submissions = pgTable("submissions", {
 export type SubmissionRow = typeof submissions.$inferSelect;
 
 // Keep the schema catalog consistent with the deployment SQL migration.
-export const executionJobs = pgTable(
+export const executionJobs = application.table(
   "execution_jobs",
   {
     id: text("id").primaryKey(),

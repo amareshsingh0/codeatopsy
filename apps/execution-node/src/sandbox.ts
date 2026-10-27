@@ -8,6 +8,8 @@ import {
   rmSync,
   writeFileSync,
   copyFileSync,
+  readFileSync,
+  lstatSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -39,7 +41,7 @@ export interface ExecOptions {
   env?: Record<string, string>;
 }
 export interface Sandbox {
-  readonly kind: "local" | "docker";
+  readonly kind: "local" | "docker" | "microvm";
   readonly dir: string;
   path(name: string): string;
   tracePath(name: string): string;
@@ -220,7 +222,7 @@ export class LocalSandbox implements Sandbox {
   }
 }
 export class DockerSandbox implements Sandbox {
-  readonly kind = "docker" as const;
+  readonly kind: "docker" | "microvm" = "docker";
   readonly dir: string;
   private readonly image = process.env.AUTOPSY_DOCKER_IMAGE || "codeautopsy-sandbox:local";
   constructor() {
@@ -241,7 +243,7 @@ export class DockerSandbox implements Sandbox {
   exec(cmd: string[], opts: ExecOptions): Promise<RunResult> {
     return this.container(cmd, opts, false);
   }
-  private container(cmd: string[], opts: ExecOptions, writableWork: boolean): Promise<RunResult> {
+  protected container(cmd: string[], opts: ExecOptions, writableWork: boolean): Promise<RunResult> {
     const name = "ca-" + randomUUID();
     const envArgs = Object.entries(opts.env ?? {}).flatMap(([k, v]) => ["-e", k + "=" + v]);
     return spawnCmd(
@@ -331,9 +333,129 @@ export class DockerSandbox implements Sandbox {
     rmSync(this.dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 }
+
+/** One credential-free Vercel VM per job; fresh PID/net/filesystem namespaces
+ * per process. The VM enforces the advertised aggregate memory boundary. */
+export class MicrovmSandbox extends DockerSandbox {
+  readonly kind = "microvm" as const;
+  private readonly memoryMb: number;
+  constructor() {
+    super();
+    this.memoryMb = Number(process.env.AUTOPSY_VM_MEMORY_MB);
+    const actual = Number(readFileSync("/sys/fs/cgroup/memory.max", "utf8").trim());
+    if (
+      process.env.AUTOPSY_ISOLATED_VM !== "1" ||
+      !Number.isFinite(actual) ||
+      actual > this.memoryMb * 1024 * 1024 ||
+      ![2048, 4096].includes(this.memoryMb)
+    )
+      throw new Error("An isolated, memory-bounded VM is required");
+  }
+  protected async container(cmd: string[], opts: ExecOptions, writableWork: boolean): Promise<RunResult> {
+    if (opts.memoryLimitMb !== undefined && opts.memoryLimitMb !== this.memoryMb)
+      throw new Error("Requested memory limit does not match the isolated VM profile");
+    const stage = mkdtempSync(join(this.dir, "stage-"));
+    const traceDir = mkdtempSync(join(this.dir, "trace-stage-"));
+    chmodSync(stage, 0o777);
+    chmodSync(traceDir, 0o777);
+    try {
+      // Never expose other-side sources, binaries, inputs, or controller files.
+      for (const argument of cmd) {
+        const name = argument.startsWith("/work/") ? argument.slice(6) : argument;
+        if (!/^[a-zA-Z0-9_.-]+$/.test(name) || name === "." || name === "..") continue;
+        const source = join(this.dir, name);
+        try {
+          const stat = lstatSync(source);
+          if (!stat.isFile() || stat.isSymbolicLink()) continue;
+          copyFileSync(source, join(stage, name));
+          chmodSync(join(stage, name), stat.mode & 0o111 ? 0o755 : 0o644);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+      const result = await spawnCmd(
+        "prlimit",
+        [
+          "--nproc=128:128",
+          "--nofile=128:128",
+          "--fsize=16777216:16777216",
+          `--cpu=${Math.ceil((opts.timeoutMs ?? 30000) / 1000) + 1}`,
+          "--",
+          "bwrap",
+          "--unshare-pid",
+          "--unshare-net",
+          "--unshare-ipc",
+          "--unshare-uts",
+          "--die-with-parent",
+          "--new-session",
+          "--cap-drop",
+          "ALL",
+          "--cap-add",
+          "CAP_SETUID",
+          "--cap-add",
+          "CAP_SETGID",
+          "--cap-add",
+          "CAP_SETPCAP",
+          "--ro-bind",
+          "/opt/codeautopsy/rootfs",
+          "/",
+          "--proc",
+          "/proc",
+          "--dev",
+          "/dev",
+          "--tmpfs",
+          "/tmp",
+          writableWork ? "--bind" : "--ro-bind",
+          stage,
+          "/work",
+          "--bind",
+          traceDir,
+          "/trace",
+          "--chdir",
+          "/work",
+          "--",
+          "setpriv",
+          "--bounding-set=-all",
+          "--reuid=1000",
+          "--regid=1000",
+          "--clear-groups",
+          "--no-new-privs",
+          ...cmd,
+        ],
+        { ...opts, cwd: this.dir },
+      );
+      const outputIndex = cmd.indexOf("-o");
+      if (writableWork && outputIndex !== -1 && result.exitCode === 0) {
+        const output = filename(cmd[outputIndex + 1].replace(/^\/work\//, ""));
+        const stat = lstatSync(join(stage, output));
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 32 * 1024 * 1024)
+          throw new Error("Compiler output is invalid or too large");
+        copyFileSync(join(stage, output), join(this.dir, output));
+        chmodSync(join(this.dir, output), 0o755);
+      }
+      const trace = opts.env?.AUTOPSY_TRACE_PATH;
+      if (trace?.startsWith("/trace/")) {
+        const name = filename(trace.slice(7));
+        try {
+          const stat = lstatSync(join(traceDir, name));
+          if (stat.isFile() && !stat.isSymbolicLink() && stat.size <= 16 * 1024 * 1024)
+            copyFileSync(join(traceDir, name), join(this.dir, "traces", name));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
+      return result;
+    } finally {
+      rmSync(stage, { recursive: true, force: true });
+      rmSync(traceDir, { recursive: true, force: true });
+    }
+  }
+}
+
 export function createSandbox(): Sandbox {
   const mode = process.env.AUTOPSY_SANDBOX ?? "local";
   if (mode === "docker") return new DockerSandbox();
+  if (mode === "microvm") return new MicrovmSandbox();
   if (mode !== "local") throw new Error("Unknown AUTOPSY_SANDBOX: " + mode);
   if (process.env.NODE_ENV === "production" && process.env.AUTOPSY_ALLOW_LOCAL_EXECUTION !== "true") {
     throw new Error(

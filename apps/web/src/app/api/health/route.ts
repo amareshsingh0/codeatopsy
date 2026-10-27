@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { configurationIssue } from "@/lib/readiness";
 import { EXECUTION_NODE_URL } from "@/lib/dispatch";
+import { executionProvider } from "@/lib/execution-provider";
 export const dynamic = "force-dynamic";
 export async function GET() {
   const issue = configurationIssue();
@@ -10,6 +11,14 @@ export async function GET() {
       { status: 503, headers: { "Cache-Control": "no-store" } },
     );
   try {
+    if (executionProvider() === "vercel") {
+      const { assertSandboxReady } = await import("@/lib/vercel-jobs");
+      await assertSandboxReady();
+      return NextResponse.json(
+        { ready: true, message: "Isolated execution is ready on demand." },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
     const response = await fetch(`${EXECUTION_NODE_URL}/health`, {
       cache: "no-store",
       headers: process.env.AUTOPSY_NODE_SECRET ? { "x-autopsy-secret": process.env.AUTOPSY_NODE_SECRET } : {},

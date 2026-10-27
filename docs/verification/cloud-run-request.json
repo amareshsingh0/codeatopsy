@@ -1,0 +1,7 @@
+{
+  "problemId": "playground",
+  "language": "javascript",
+  "source": "const x=Number(require('fs').readFileSync(0,'utf8'));\nconst y=x+2;\nconsole.log(y);",
+  "input": "5\n",
+  "expectedOutput": "7\n"
+}

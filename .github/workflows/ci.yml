@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
 
       - name: Install
@@ -42,7 +42,7 @@ jobs:
         run: pnpm test
 
       - name: Apply disposable production smoke database migration
-        run: PGPASSWORD=ci-disposable psql -h 127.0.0.1 -U postgres -d autopsy_test -f packages/db/migrations/001_execution_jobs.sql
+        run: PGPASSWORD=ci-disposable psql -h 127.0.0.1 -U postgres -d autopsy_test -f packages/db/migrations/002_codeautopsy_private.sql
 
       - name: Verify temporary Postgres test lifecycle
         run: node scripts/test-postgres.mjs

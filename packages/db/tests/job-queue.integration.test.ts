@@ -27,8 +27,18 @@ describe.skipIf(!url)("Postgres queue integration", () => {
     admin = postgres(url!, { prepare: false });
     await admin`create schema ${admin(schema)}`;
     sql = postgres(url!, { prepare: false, connection: { search_path: schema } });
-    await sql.unsafe(readFileSync(new URL("../migrations/001_execution_jobs.sql", import.meta.url), "utf8"));
-    queue = new PostgresJobQueue(sql, 2, 60, 3);
+    const migrator = postgres(url!, { prepare: false, max: 1 });
+    try {
+      await migrator.unsafe(
+        readFileSync(
+          new URL("../migrations/002_codeautopsy_private.sql", import.meta.url),
+          "utf8",
+        ).replaceAll("codeautopsy", schema),
+      );
+    } finally {
+      await migrator.end();
+    }
+    queue = new PostgresJobQueue(sql, 2, 60, 3, schema);
     await queue.assertReady();
   });
   afterAll(async () => {
@@ -53,7 +63,7 @@ describe.skipIf(!url)("Postgres queue integration", () => {
     expect(await queue.claim()).toBeNull();
   });
   it("recovers expired leases and fences stale terminal writes", async () => {
-    await sql`update execution_jobs set lease_until = now() - interval '1 second' where id = 'a'`;
+    await sql`update ${sql(schema + ".execution_jobs")} set lease_until = now() - interval '1 second' where id = 'a'`;
     const lease = await queue.claim();
     expect(lease?.jobId).toBe("a");
     expect(await queue.finish({ ...lease!, token: "stale-token" }, null, "stale")).toBe(false);
@@ -64,9 +74,10 @@ describe.skipIf(!url)("Postgres queue integration", () => {
     await queue.enqueue(job("c"));
     expect((await queue.get("c"))?.status).toBe("queued");
     const unicodeJob = { ...job("unicode"), source: 'print("→ ✓ café")' };
-    await new PostgresJobQueue(sql, 10).enqueue(unicodeJob);
+    await new PostgresJobQueue(sql, 10, 60, 3, schema).enqueue(unicodeJob);
     expect((await queue.get("unicode"))?.jobId).toBe("unicode");
-    const [saved] = await sql`select payload->>'source' as source from execution_jobs where id = 'unicode'`;
+    const [saved] =
+      await sql`select payload->>'source' as source from ${sql(schema + ".execution_jobs")} where id = 'unicode'`;
     expect(saved.source).toBe(unicodeJob.source);
   });
 });

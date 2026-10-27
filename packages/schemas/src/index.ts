@@ -98,7 +98,7 @@ export const Problem = z.object({
   topics: z.array(z.string()).default([]),
   language: Language.default("cpp"),
   timeLimitMs: z.number().int().min(100).max(30000).default(5000),
-  memoryLimitMb: z.number().int().min(32).max(1024).default(256),
+  memoryLimitMb: z.number().int().min(32).max(8192).default(256),
   tests: z.array(TestCase).min(1).max(100),
   /** known-correct solution; server-side only, never sent to the browser */
   referenceSource: z.string(),

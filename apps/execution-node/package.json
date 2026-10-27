@@ -7,6 +7,7 @@
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.cjs",
     "build": "esbuild src/server.ts --bundle --platform=node --format=cjs --outfile=dist/server.cjs",
+    "build:microvm": "esbuild src/microvm-job.ts --bundle --platform=node --format=cjs --outfile=dist/job.cjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
