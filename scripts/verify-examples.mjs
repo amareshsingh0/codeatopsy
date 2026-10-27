@@ -1,11 +1,14 @@
 import { readFile } from "node:fs/promises";
+import ts from "typescript";
 const base = process.env.AUTOPSY_WEB_URL || "http://127.0.0.1:3000";
 const source = await readFile(new URL("../apps/web/src/lib/examples.ts", import.meta.url), "utf8");
-const examples = [
-  ...source.matchAll(
-    /python\("([^"]+)",\s*"[^"]+",\s*"[^"]+",\s*"[^"]+",\s*("(?:[^"\\]|\\.)*"),\s*("(?:[^"\\]|\\.)*")\)/g,
-  ),
-].map((match) => ({ slug: match[1], source: JSON.parse(match[2]), expectedOutput: JSON.parse(match[3]) }));
+// Load the real exported catalog; source formatting must not change verification.
+const compiled = ts.transpileModule(source, {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+});
+const { EXAMPLES: examples } = await import(
+  `data:text/javascript;base64,${Buffer.from(compiled.outputText).toString("base64")}`
+);
 if (examples.length !== 20) throw new Error(`Expected 20 examples, parsed ${examples.length}`);
 let cookie = "";
 for (const example of examples) {

@@ -1,32 +1,36 @@
-# Existing Vercel production setup
+# Production setup
 
-The existing Vercel project `codeatopsy` hosts the frontend/API. It currently needs production execution infrastructure configured. A frontend deployment alone does not enable code execution.
+The existing `codeatopsy.vercel.app` deployment uses the [native Vercel Sandbox provider](VERCEL-NATIVE-EXECUTION.md). That is the current cloud-only setup and requires no static `EXECUTION_NODE_URL` or local Docker installation.
+
+## Alternative: HTTP execution worker
+
+The instructions below apply only when deliberately choosing the separately hosted worker provider. They are not additional requirements for the deployed native provider.
 
 ## Required infrastructure
 
-- A persistent Postgres database with pooled TLS connections and backups. Apply `packages/db/migrations/001_execution_jobs.sql` through your database migration runner before starting workers. Use separate least-privilege roles for the web store and worker queue.
+- A persistent Postgres database with pooled TLS connections and backups. Apply `packages/db/migrations/002_codeautopsy_private.sql` through your database migration runner before starting workers. Use separate least-privilege roles for the web store and worker queue.
 - A dedicated execution service reachable over HTTPS, with Docker available and the sandbox image built from `infra/sandbox.Dockerfile`. The worker image and sandbox image are separate. Keep the Docker daemon private; configure the worker to use `AUTOPSY_SANDBOX=docker` and the correct `AUTOPSY_DOCKER_IMAGE`.
 - A shared high-entropy authentication secret supplied only through hosting secret settings. Do not paste it in chat, source files or logs.
 
 ## Vercel environment variable names
 
-| Name | Purpose |
-| --- | --- |
-| `DATABASE_URL` | Web role's pooled Postgres connection |
-| `EXECUTION_NODE_URL` | HTTPS execution service base URL |
+| Name                  | Purpose                                            |
+| --------------------- | -------------------------------------------------- |
+| `DATABASE_URL`        | Web role's pooled Postgres connection              |
+| `EXECUTION_NODE_URL`  | HTTPS execution service base URL                   |
 | `AUTOPSY_NODE_SECRET` | Authenticates web-to-worker requests and callbacks |
 
 ## Execution service environment variable names
 
-| Name | Purpose |
-| --- | --- |
-| `DATABASE_URL` | Worker role's connection to the shared queue database |
-| `AUTOPSY_NODE_SECRET` | Same shared authentication value as Vercel |
-| `AUTOPSY_SANDBOX` | `docker` |
-| `AUTOPSY_DOCKER_IMAGE` | Built toolchain sandbox image tag |
-| `AUTOPSY_HOST` | `0.0.0.0` behind a protected TLS ingress |
-| `AUTOPSY_CONCURRENCY` | Start at 1, increase after resource/load validation |
-| `AUTOPSY_MAX_JOBS` | Shared pending/running queue capacity, default 100 |
+| Name                   | Purpose                                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`         | Worker role's connection to the shared queue database                                          |
+| `AUTOPSY_NODE_SECRET`  | Same shared authentication value as Vercel                                                     |
+| `AUTOPSY_SANDBOX`      | `docker`                                                                                       |
+| `AUTOPSY_DOCKER_IMAGE` | Built toolchain sandbox image tag                                                              |
+| `AUTOPSY_HOST`         | `0.0.0.0` behind a protected TLS ingress                                                       |
+| `AUTOPSY_CONCURRENCY`  | Start at 1, increase after resource/load validation                                            |
+| `AUTOPSY_MAX_JOBS`     | Shared pending/running queue capacity, default 100                                             |
 | `AUTOPSY_CALLBACK_URL` | Optional Vercel `/api/internal/execution-callback` URL; polling independently recovers results |
 
 No language-model key is required for deterministic reports. Optional provider narratives must not delay or replace original execution verdicts.

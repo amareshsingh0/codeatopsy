@@ -2,6 +2,10 @@
 
 ## Implemented execution path
 
+The current deployment uses Vercel Functions → private PostgreSQL admission/ownership/launch records → one credential-free Vercel Sandbox VM per submission → bounded result retrieval → PostgreSQL terminal persistence → VM deletion. Each program stage has its own non-root namespace and read-only toolchain. See [native execution](VERCEL-NATIVE-EXECUTION.md) for budgets, recovery, retention and snapshot refresh.
+
+## Alternative HTTP worker path
+
 Vercel hosts the Next.js UI and API. The API validates a bounded request, persists a submission, then sends an authenticated job to an execution service. Original source determines compiler/runtime/output verdicts. A separate instrumented run produces bounded evidence. The API persists completed results through callback or polling recovery. Browser diagrams use captured values, never generated illustrations.
 
 ```mermaid
