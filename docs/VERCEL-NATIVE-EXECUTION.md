@@ -41,7 +41,7 @@ Build the trusted bundle with `pnpm --filter @codeautopsy/execution-node build:m
 4. Remove fixture/result/started files and temporary build artifacts before snapshotting. Keep the toolchain and trusted assets. Create the snapshot with a finite `--expiration 30d`, stop the build VM, and record the bundle SHA-256 and new snapshot ID.
 5. Update the Production snapshot ID and deploy a protected candidate. Verify an actual authenticated submission before promoting the public deployment.
 
-The current verified snapshot is `snap_l6HyNtj6BR4ORVvtQJDSGsIfvQyg`; trusted bundle SHA-256 is `C4D6659E31A74B719667654849807B800E90E611F64D53504893172ADE7E26A1`. Rebuild after execution-source or runtime-asset changes; deploying only the web application does not update an existing snapshot.
+The current verified snapshot is `snap_Nm98cHavATFW96mDxSWEeBzCryJO`; trusted bundle SHA-256 is `761401F682875A62D6C2894341A19454D395CB44D418D87F100B1BCDAC7C22FF`. This refresh includes the validated dependency security patches from 28 October 2026 and passed all eleven native cloud regression cases. Rebuild after execution-source, dependency or runtime-asset changes; deploying only the web application does not update an existing snapshot.
 
 Vercel resets snapshot expiration on use. The finite snapshot can expire after thirty days without a restore, so check readiness and rebuild following a long inactive period. See [Vercel's retention announcement](https://vercel.com/changelog/sandboxes-now-expire-based-on-last-use). Track usage in the hosting dashboard; Hobby quotas pause creation when exhausted, and personal/non-commercial eligibility applies. See [current pricing and limits](https://vercel.com/docs/sandbox/pricing).
 

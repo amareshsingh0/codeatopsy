@@ -1,9 +1,9 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Problem, Submission, TestVerdict } from "@codeautopsy/schemas";
 import { alignTraces } from "@codeautopsy/trace-core";
-import { TraceViewer } from "./TraceViewer";
+import { WorkspaceViews, type WorkspaceView } from "./WorkspaceViews";
 import { Report } from "./Report";
 import { useSubmission } from "./useSubmission";
 import { ExecutionDetails } from "./ExecutionDetails";
@@ -11,7 +11,15 @@ import { RunProgress } from "./RunProgress";
 import { Icon } from "./Icon";
 import { getDiagnostics } from "@/lib/diagnostics";
 
-const ClientCodeEditor = dynamic(() => import("./CodeEditor").then((m) => m.CodeEditor), { ssr: false });
+const ClientCodeEditor = dynamic(() => import("./CodeEditor").then((m) => m.CodeEditor), {
+  ssr: false,
+  loading: () => (
+    <div className="editor-loading" style={{ height: 260 }} role="status">
+      Preparing your editor…
+    </div>
+  ),
+});
+const TraceViewer = dynamic(() => import("./TraceViewer").then((m) => m.TraceViewer));
 
 export type ClientProblem = Omit<Problem, "referenceSource">;
 
@@ -20,7 +28,14 @@ export function Workspace({ problem }: { problem: ClientProblem }) {
   const { phase, submission, error, submit: runSubmission, stop } = useSubmission();
   const [diagnosticLine, setDiagnosticLine] = useState<number | null>(null);
   const [selectedTest, setSelectedTest] = useState<string | null>(null);
+  const [view, setView] = useState<WorkspaceView>("edit");
+  const views = useRef<HTMLDivElement>(null);
+  const revealReplay = useCallback(
+    () => views.current?.scrollIntoView({ block: "start", behavior: "instant" }),
+    [],
+  );
   const submit = () => {
+    setView("edit");
     setSelectedTest(null);
     setDiagnosticLine(null);
     void runSubmission({ problemId: problem.slug, source });
@@ -38,6 +53,19 @@ export function Workspace({ problem }: { problem: ClientProblem }) {
     const firstTraced = result.verdicts.find((v) => result.studentTraces[v.testId]);
     setSelectedTest(firstFailing?.testId ?? firstTraced?.testId ?? result.verdicts[0]?.testId ?? null);
   }, [result, selectedTest]);
+  useEffect(() => {
+    if (result) {
+      setView(Object.keys(result.studentTraces).length ? "replay" : "evidence");
+      const frame = requestAnimationFrame(() =>
+        views.current?.scrollIntoView({ block: "start", behavior: "instant" }),
+      );
+      return () => cancelAnimationFrame(frame);
+    }
+  }, [result]);
+  const inspectLine = (line: number) => {
+    setDiagnosticLine(line);
+    setView("edit");
+  };
 
   const viewerData = useMemo(() => {
     if (!result || !selectedTest) return null;
@@ -74,7 +102,16 @@ export function Workspace({ problem }: { problem: ClientProblem }) {
         </p>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[340px_1fr]">
+      <div ref={views} className="workspace-view-anchor">
+        <WorkspaceViews
+          view={view}
+          onChange={setView}
+          replayReady={!!viewerData}
+          resultReady={!!result}
+          running={phase === "running"}
+        />
+      </div>
+      <div className="workspace-panel grid gap-5 lg:grid-cols-[340px_1fr]" hidden={view !== "edit"}>
         {/* ---------- left: statement + tests ---------- */}
         <div className="grid content-start gap-4">
           <div className="panel p-4">
@@ -170,26 +207,54 @@ export function Workspace({ problem }: { problem: ClientProblem }) {
               Change the source, run the tests, then inspect the first captured difference.
             </div>
           </div>
-
-          {viewerData && (
-            <TraceViewer
-              studentSource={submission?.source ?? source}
-              referenceSource={viewerData.referenceSource}
-              language={problem.language}
-              studentTrace={viewerData.studentTrace}
-              referenceTrace={viewerData.referenceTrace}
-              pairs={viewerData.pairs}
-              divergence={viewerData.divergence}
-              output={viewerData.output}
-            />
-          )}
-
-          {result && (
-            <ExecutionDetails result={result} showOutput={!viewerData} onInspectLine={setDiagnosticLine} />
-          )}
-          {result?.report && <Report report={result.report} />}
         </div>
       </div>
+      {result && (
+        <div className="workspace-panel" hidden={view === "edit"}>
+          <div className="test-switcher" role="group" aria-label="Inspect a test">
+            {verdicts.map((verdict) => (
+              <button
+                className={`btn ${selectedTest === verdict.testId ? "selected" : ""}`}
+                aria-pressed={selectedTest === verdict.testId}
+                key={verdict.testId}
+                onClick={() => setSelectedTest(verdict.testId)}
+              >
+                {verdict.testId}
+                <VerdictChip status={verdict.status} />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {viewerData && (
+        <div className="workspace-panel" hidden={view !== "replay"}>
+          <TraceViewer
+            active={view === "replay"}
+            onReady={revealReplay}
+            studentSource={submission?.source ?? source}
+            referenceSource={viewerData.referenceSource}
+            language={problem.language}
+            studentTrace={viewerData.studentTrace}
+            referenceTrace={viewerData.referenceTrace}
+            pairs={viewerData.pairs}
+            divergence={viewerData.divergence}
+            output={viewerData.output}
+          />
+        </div>
+      )}
+      {view === "replay" && !viewerData && result && (
+        <div className="panel p-5">
+          <p>
+            This test has no captured replay. Its original verdict and output are available in Run evidence.
+          </p>
+        </div>
+      )}
+      {result && (
+        <div className="workspace-panel evidence-layout" hidden={view !== "evidence"}>
+          <ExecutionDetails result={result} showOutput onInspectLine={inspectLine} />
+          {result.report && <Report report={result.report} />}
+        </div>
+      )}
     </div>
   );
 }

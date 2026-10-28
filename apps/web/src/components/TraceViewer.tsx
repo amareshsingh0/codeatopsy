@@ -1,11 +1,15 @@
 "use client";
 import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import dynamic from "next/dynamic";
 import type { Divergence, Language, Trace } from "@codeautopsy/schemas";
 import { createTraceIndex, timelineBuckets } from "@/lib/trace-state";
-import { CodeEditor } from "./CodeEditor";
+import { compactValue, createReplayNavigation, upperBound } from "@/lib/replay-insights";
+import { SourceWalkthrough } from "./SourceWalkthrough";
 import { ExecutionCanvas } from "./ExecutionCanvas";
 import { Icon } from "./Icon";
 import { LearnStep } from "./LearnStep";
+import { PredictionCheck } from "./PredictionCheck";
+const CodeEditor = dynamic(() => import("./CodeEditor").then((module) => module.CodeEditor));
 interface Props {
   studentSource: string;
   referenceSource?: string;
@@ -15,6 +19,8 @@ interface Props {
   pairs?: Array<{ s: number; r: number }>;
   divergence?: Divergence | null;
   output?: string | null;
+  active?: boolean;
+  onReady?: () => void;
 }
 const COLORS: Record<string, string> = {
   assign: "var(--accent)",
@@ -49,6 +55,8 @@ export function TraceViewer({
   pairs = [],
   divergence,
   output,
+  active = true,
+  onReady,
 }: Props) {
   const events = studentTrace.events;
   const last = Math.max(0, events.length - 1);
@@ -62,7 +70,41 @@ export function TraceViewer({
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
   const [learn, setLearn] = useState(true);
+  const [layout, setLayout] = useState("balanced");
+  const [density, setDensity] = useState("comfortable");
+  const [mobileView, setMobileView] = useState("visual");
+  const [showLog, setShowLog] = useState(false);
+  useEffect(() => {
+    if (!active) return;
+    const frame = requestAnimationFrame(() => onReady?.());
+    return () => cancelAnimationFrame(frame);
+  }, [active, onReady]);
+  useEffect(() => {
+    if (!active) setPlaying(false);
+  }, [active]);
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("codeautopsy:replay-display") ?? "{}");
+      if (["balanced", "visual"].includes(saved.layout)) setLayout(saved.layout);
+      if (["comfortable", "compact"].includes(saved.density)) setDensity(saved.density);
+    } catch {
+      /* Preferences are optional; private browsing remains functional. */
+    }
+  }, []);
+  const displayPreference = (nextLayout: string, nextDensity: string) => {
+    setLayout(nextLayout);
+    setDensity(nextDensity);
+    try {
+      localStorage.setItem(
+        "codeautopsy:replay-display",
+        JSON.stringify({ layout: nextLayout, density: nextDensity }),
+      );
+    } catch {
+      /* In-memory preferences still work. */
+    }
+  };
   const stateIndex = useMemo(() => createTraceIndex(events), [events]);
+  const navigation = useMemo(() => createReplayNavigation(events), [events]);
   const refEvents = referenceTrace?.events;
   const referenceIndex = useMemo(() => createTraceIndex(refEvents ?? []), [refEvents]);
   const buckets = useMemo(() => timelineBuckets(events), [events]);
@@ -95,6 +137,13 @@ export function TraceViewer({
     );
     return () => clearInterval(timer);
   }, [playing, last, speed]);
+  useEffect(() => {
+    const pause = () => {
+      if (document.hidden) setPlaying(false);
+    };
+    document.addEventListener("visibilitychange", pause);
+    return () => document.removeEventListener("visibilitychange", pause);
+  }, []);
   const onKey = (event: React.KeyboardEvent<HTMLElement>) => {
     if (
       (event.target as HTMLElement).closest(
@@ -112,14 +161,8 @@ export function TraceViewer({
       setPlaying((value) => !value);
     }
   };
-  const alignedReference = useMemo(() => {
-    let found = 0;
-    for (const pair of pairs) {
-      if (pair.s > index) break;
-      found = pair.r;
-    }
-    return found;
-  }, [pairs, index]);
+  const referencePositions = useMemo(() => pairs.map((pair) => pair.s), [pairs]);
+  const alignedReference = pairs[upperBound(referencePositions, index) - 1]?.r ?? 0;
   const refIndex = referenceCursor ?? alignedReference;
   const state = useMemo(() => stateIndex.snapshot(index), [stateIndex, index]);
   const previous = useMemo(() => stateIndex.snapshot(index - 1), [stateIndex, index]);
@@ -127,7 +170,7 @@ export function TraceViewer({
   const current = events[index];
   const rows = useMemo(
     () =>
-      events
+      (showLog ? events : [])
         .map((event, i) => ({ event, i }))
         .filter(
           ({ event, i }) =>
@@ -137,28 +180,28 @@ export function TraceViewer({
                 .toLowerCase()
                 .includes(query.toLowerCase())),
         ),
-    [events, filter, query],
+    [events, filter, query, showLog],
   );
   const rowPage = Math.min(page, Math.max(0, Math.ceil(rows.length / 30) - 1));
   const description = current
     ? current.kind === "assign"
-      ? `${current.name} = ${current.value}`
+      ? `${compactValue(current.name??"value",80)} = ${compactValue(current.value ?? "?", 120)}`
       : current.kind === "branch"
-        ? `${current.cond} → ${current.taken ? "true" : "false"}`
+        ? `${compactValue(current.cond ?? "Condition", 120)} → ${current.taken ? "true" : "false"}`
         : current.kind === "call"
-          ? `Enter ${current.fn ?? "anonymous"}()`
+          ? `Enter ${compactValue(current.fn ?? "anonymous", 80)}()`
           : current.kind === "return"
-            ? `Return ${current.value ?? ""}`
+            ? `Return ${compactValue(current.value ?? "", 120)}`
             : current.kind === "returnvoid"
               ? "Return"
               : `Execute ${current.kind}`
     : "No captured events";
   return (
-    <section className="trace-viewer" onKeyDown={onKey} aria-label="Execution replay">
+    <section className={`trace-viewer density-${density}`} onKeyDown={onKey} aria-label="Execution replay">
       <div className="replay-heading">
         <div>
           <span className="eyebrow">EXECUTION REPLAY</span>
-          <h2>Make every step visible.</h2>
+          <h2>See it. Step through it. Understand it.</h2>
         </div>
         <label className="toggle-label">
           <input
@@ -174,6 +217,34 @@ export function TraceViewer({
         <span className="chip">
           {events.length.toLocaleString()} captured events{studentTrace.meta.truncated ? " · partial" : ""}
         </span>
+        <details className="display-options">
+          <summary>Display options</summary>
+          <div>
+            <label>
+              Layout
+              <select
+                aria-label="Replay layout"
+                value={layout}
+                onChange={(e) => displayPreference(e.target.value, density)}
+              >
+                <option value="balanced">Code + visual</option>
+                <option value="visual">Visual focus</option>
+              </select>
+            </label>
+            <label>
+              Spacing
+              <select
+                aria-label="Replay spacing"
+                value={density}
+                onChange={(e) => displayPreference(layout, e.target.value)}
+              >
+                <option value="comfortable">Comfortable</option>
+                <option value="compact">Compact</option>
+              </select>
+            </label>
+            <p>Saved on this device. Your code is not saved in display preferences.</p>
+          </div>
+        </details>
       </div>
       {divergence && (
         <div className="divergence-banner">
@@ -258,6 +329,13 @@ export function TraceViewer({
               ))}
             </select>
           </label>
+          <button
+            className="btn next-value"
+            disabled={navigation.next(index, "value") === undefined}
+            onClick={() => seek(navigation.next(index, "value") ?? index)}
+          >
+            Next value <Icon name="next" />
+          </button>
         </div>
         <div className="timeline-density" aria-hidden="true">
           {buckets.map((bucket) => (
@@ -298,77 +376,114 @@ export function TraceViewer({
           <span className="chip">line {current?.line ?? "—"}</span>
         </div>
       </div>
-      {learn && <LearnStep event={current} previous={previous.variables} />}
-      {current?.kind === "branch" && (
-        <div className="panel branch-inspector">
-          <span className="eyebrow">RECORDED CONTROL FLOW</span>
-          <div className="branch-condition mono">{current.cond || "Condition"}</div>
-          <div className="branch-paths">
-            <div className={current.taken ? "taken" : ""}>
-              <strong>True</strong>
-              <span>{current.taken ? "Recorded outcome" : "Alternative outcome"}</span>
-            </div>
-            <div className={!current.taken ? "taken false-path" : ""}>
-              <strong>False</strong>
-              <span>{!current.taken ? "Recorded outcome" : "Alternative outcome"}</span>
-            </div>
-          </div>
-          <p className="coverage-note">
-            Only the condition outcome is recorded here. The alternate path is a diagram of the decision, not
-            an executed trace.
-          </p>
-        </div>
-      )}
-      {hasReference && (
-        <div className="reference-control">
-          <label className="toggle-label">
-            <input
-              type="checkbox"
-              checked={showReference}
-              onChange={(e) => setShowReference(e.target.checked)}
+      <div className="replay-mobile-switch" role="group" aria-label="Replay panel">
+        <button
+          className={`btn ${mobileView === "visual" ? "btn-primary" : ""}`}
+          aria-pressed={mobileView === "visual"}
+          onClick={() => setMobileView("visual")}
+        >
+          <Icon name="layers" />
+          Visual
+        </button>
+        <button
+          className={`btn ${mobileView === "code" ? "btn-primary" : ""}`}
+          aria-pressed={mobileView === "code"}
+          onClick={() => setMobileView("code")}
+        >
+          <Icon name="code" />
+          Code
+        </button>
+      </div>
+      <div className={`replay-stage layout-${layout} mobile-${mobileView}`}>
+        <div className="replay-code-context">
+          <SourceWalkthrough
+            source={studentSource}
+            line={current?.line ?? 1}
+            referenceSource={hasReference && showReference ? referenceSource : undefined}
+            referenceLine={refEvents?.[refIndex]?.line}
+          />
+          {learn && <LearnStep event={current} previous={previous.variables} />}
+          {learn && (
+            <PredictionCheck
+              event={events[navigation.next(index, "value") ?? -1]}
+              onReveal={() => seek(navigation.next(index, "value") ?? index)}
             />
-            Compare reference state
-          </label>
-          <label className="toggle-label">
-            <input
-              type="checkbox"
-              checked={referenceCursor === null}
-              onChange={(e) => setReferenceCursor(e.target.checked ? null : alignedReference)}
-            />
-            Follow recorded alignment
-          </label>
-          {referenceCursor !== null && (
-            <label className="reference-scrubber">
-              Reference step {refIndex + 1}
-              <input
-                type="range"
-                aria-label="Reference execution step"
-                min={0}
-                max={Math.max(0, (refEvents?.length ?? 1) - 1)}
-                value={refIndex}
-                onChange={(e) => setReferenceCursor(Number(e.target.value))}
-              />
-            </label>
-          )}
-          {referenceCursor === null && divergence && index > divergence.studentSeq && (
-            <p className="coverage-note">
-              Alignment ends at the first difference. Unlink the reference to explore its later steps
-              independently.
-            </p>
           )}
         </div>
-      )}
-      <VisualBoundary key={studentTrace.meta.testId}>
-        <ExecutionCanvas
-          variables={state.variables}
-          previous={previous.variables}
-          reference={hasReference && showReference ? refState.variables : undefined}
-          stack={state.stack}
-          histories={stateIndex.histories}
-          index={index}
-          onSeek={seek}
-        />
-      </VisualBoundary>
+        <div className="replay-state-context">
+          {current?.kind === "branch" && (
+            <div className="panel branch-inspector">
+              <span className="eyebrow">RECORDED CONTROL FLOW</span>
+              <div className="branch-condition mono">{compactValue(current.cond || "Condition", 180)}</div>
+              <div className="branch-paths">
+                <div className={current.taken ? "taken" : ""}>
+                  <strong>True</strong>
+                  <span>{current.taken ? "Recorded outcome" : "Alternative outcome"}</span>
+                </div>
+                <div className={!current.taken ? "taken false-path" : ""}>
+                  <strong>False</strong>
+                  <span>{!current.taken ? "Recorded outcome" : "Alternative outcome"}</span>
+                </div>
+              </div>
+              <p className="coverage-note">
+                Only the condition outcome is recorded here. The alternate path is a diagram of the decision,
+                not an executed trace.
+              </p>
+            </div>
+          )}
+          {hasReference && (
+            <div className="reference-control">
+              <label className="toggle-label">
+                <input
+                  type="checkbox"
+                  checked={showReference}
+                  onChange={(e) => setShowReference(e.target.checked)}
+                />
+                Compare reference state
+              </label>
+              <label className="toggle-label">
+                <input
+                  type="checkbox"
+                  checked={referenceCursor === null}
+                  onChange={(e) => setReferenceCursor(e.target.checked ? null : alignedReference)}
+                />
+                Follow recorded alignment
+              </label>
+              {referenceCursor !== null && (
+                <label className="reference-scrubber">
+                  Reference step {refIndex + 1}
+                  <input
+                    type="range"
+                    aria-label="Reference execution step"
+                    min={0}
+                    max={Math.max(0, (refEvents?.length ?? 1) - 1)}
+                    value={refIndex}
+                    onChange={(e) => setReferenceCursor(Number(e.target.value))}
+                  />
+                </label>
+              )}
+              {referenceCursor === null && divergence && index > divergence.studentSeq && (
+                <p className="coverage-note">
+                  Alignment ends at the first difference. Unlink the reference to explore its later steps
+                  independently.
+                </p>
+              )}
+            </div>
+          )}
+          <VisualBoundary key={studentTrace.meta.testId}>
+            <ExecutionCanvas
+              variables={state.variables}
+              previous={previous.variables}
+              reference={hasReference && showReference ? refState.variables : undefined}
+              stack={state.stack}
+              histories={stateIndex.histories}
+              index={index}
+              onSeek={seek}
+              activeVariable={events[navigation.latestValue(index) ?? -1]?.name}
+            />
+          </VisualBoundary>
+        </div>
+      </div>
       <div className="panel source-replay">
         <button className="disclosure" aria-expanded={showSource} onClick={() => setShowSource(!showSource)}>
           <Icon name="code" />
@@ -401,72 +516,76 @@ export function TraceViewer({
           </div>
         )}
       </div>
-      <details className="panel event-log">
+      <details className="panel event-log" onToggle={(event) => setShowLog(event.currentTarget.open)}>
         <summary>Event log · search the captured execution</summary>
-        <div className="event-search">
-          <label>
-            Search
-            <input
-              type="search"
-              aria-label="Search events by variable, value or line"
-              placeholder="Variable, value, line…"
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setPage(0);
-              }}
-            />
-          </label>
-          <label>
-            Type
-            <select
-              aria-label="Event type"
-              value={filter}
-              onChange={(e) => {
-                setFilter(e.target.value);
-                setPage(0);
-              }}
-            >
-              <option value="all">All events</option>
-              {Object.keys(COLORS).map((kind) => (
-                <option key={kind}>{kind}</option>
+        {showLog && (
+          <>
+            <div className="event-search">
+              <label>
+                Search
+                <input
+                  type="search"
+                  aria-label="Search events by variable, value or line"
+                  placeholder="Variable, value, line…"
+                  value={query}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setPage(0);
+                  }}
+                />
+              </label>
+              <label>
+                Type
+                <select
+                  aria-label="Event type"
+                  value={filter}
+                  onChange={(e) => {
+                    setFilter(e.target.value);
+                    setPage(0);
+                  }}
+                >
+                  <option value="all">All events</option>
+                  {Object.keys(COLORS).map((kind) => (
+                    <option key={kind}>{kind}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="event-rows">
+              {rows.slice(rowPage * 30, rowPage * 30 + 30).map(({ event, i }) => (
+                <button
+                  key={i}
+                  className={`event-row ${i === index ? "selected" : ""}`}
+                  onClick={() => seek(i)}
+                  aria-label={`Step ${i + 1}, ${event.kind}, line ${event.line}`}
+                >
+                  <span className="mono">{i + 1}</span>
+                  <span style={{ color: COLORS[event.kind] }}>{event.kind}</span>
+                  <span className="mono">
+                    {event.name ? `${event.name} = ${event.value}` : (event.cond ?? event.fn ?? "statement")}
+                  </span>
+                  <span>line {event.line}</span>
+                </button>
               ))}
-            </select>
-          </label>
-        </div>
-        <div className="event-rows">
-          {rows.slice(rowPage * 30, rowPage * 30 + 30).map(({ event, i }) => (
-            <button
-              key={i}
-              className={`event-row ${i === index ? "selected" : ""}`}
-              onClick={() => seek(i)}
-              aria-label={`Step ${i + 1}, ${event.kind}, line ${event.line}`}
-            >
-              <span className="mono">{i + 1}</span>
-              <span style={{ color: COLORS[event.kind] }}>{event.kind}</span>
-              <span className="mono">
-                {event.name ? `${event.name} = ${event.value}` : (event.cond ?? event.fn ?? "statement")}
+            </div>
+            {!rows.length && <p className="muted">No matching events.</p>}
+            <div className="pagination">
+              <button className="btn" disabled={rowPage === 0} onClick={() => setPage(rowPage - 1)}>
+                Previous
+              </button>
+              <span>
+                {rows.length} events · page {rowPage + 1} of {Math.max(1, Math.ceil(rows.length / 30))}
               </span>
-              <span>line {event.line}</span>
-            </button>
-          ))}
-        </div>
-        {!rows.length && <p className="muted">No matching events.</p>}
-        <div className="pagination">
-          <button className="btn" disabled={rowPage === 0} onClick={() => setPage(rowPage - 1)}>
-            Previous
-          </button>
-          <span>
-            {rows.length} events · page {rowPage + 1} of {Math.max(1, Math.ceil(rows.length / 30))}
-          </span>
-          <button
-            className="btn"
-            disabled={(rowPage + 1) * 30 >= rows.length}
-            onClick={() => setPage(rowPage + 1)}
-          >
-            Next
-          </button>
-        </div>
+              <button
+                className="btn"
+                disabled={(rowPage + 1) * 30 >= rows.length}
+                onClick={() => setPage(rowPage + 1)}
+              >
+                Next
+              </button>
+            </div>
+          </>
+        )}
       </details>
       {output !== undefined && output !== null && (
         <div className="panel output-console">

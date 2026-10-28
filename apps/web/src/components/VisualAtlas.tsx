@@ -14,6 +14,29 @@ export function VisualAtlas() {
   );
   return (
     <>
+      <section className="learning-path panel" aria-label="Suggested learning path">
+        <div>
+          <span className="eyebrow">A SIMPLE PLACE TO START</span>
+          <h2>One idea. One visible change.</h2>
+          <p>Choose a small program, run it, then follow the highlighted code.</p>
+        </div>
+        <ol>
+          {[
+            ["arrays", "Changing values"],
+            ["branches", "Making decisions"],
+            ["graphs", "Following connections"],
+            ["dynamic-programming", "Building an answer"],
+          ].map(([slug, label], i) => (
+            <li key={slug}>
+              <Link href={`/playground?example=${slug}`}>
+                <span>{i + 1}</span>
+                {label}
+                <Icon name="arrow" size={14} />
+              </Link>
+            </li>
+          ))}
+        </ol>
+      </section>
       <div className="atlas-filters">
         <div className="atlas-tabs" aria-label="Filter topics">
           {["All", "Data", "Structures", "Algorithms", "Execution"].map((category) => (
@@ -35,6 +58,12 @@ export function VisualAtlas() {
           placeholder="Find a concept…"
         />
       </div>
+      <div className="atlas-results">
+        <span role="status">
+          {items.length} of {EXAMPLES.length} concepts
+        </span>
+        <span>Real programs · editable code · recorded replay</span>
+      </div>
       <div className="atlas-grid">
         {items.map((example) => (
           <article className="panel atlas-card" key={example.slug}>
@@ -50,6 +79,7 @@ export function VisualAtlas() {
               <span className="eyebrow">{example.category}</span>
               <h2>{example.title}</h2>
               <p>{example.question}</p>
+              <span className="atlas-meta">Python · change the code and compare</span>
               <Link className="btn" href={`/playground?example=${example.slug}`}>
                 Run & explore
                 <Icon name="arrow" />
@@ -58,7 +88,20 @@ export function VisualAtlas() {
           </article>
         ))}
       </div>
-      {!items.length && <p className="empty-state">No topics match your search.</p>}
+      {!items.length && (
+        <div className="empty-state">
+          <p>No concepts match your search.</p>
+          <button
+            className="btn"
+            onClick={() => {
+              setQuery("");
+              setFilter("All");
+            }}
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
     </>
   );
 }

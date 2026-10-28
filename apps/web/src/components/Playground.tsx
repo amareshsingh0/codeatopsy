@@ -1,9 +1,9 @@
 "use client";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LANGUAGE_LABEL, type Language } from "@codeautopsy/schemas";
-import { TraceViewer } from "./TraceViewer";
+import { WorkspaceViews, type WorkspaceView } from "./WorkspaceViews";
 import { Report } from "./Report";
 import { useSubmission } from "./useSubmission";
 import { ExecutionDetails } from "./ExecutionDetails";
@@ -13,7 +13,21 @@ import { getDiagnostics } from "@/lib/diagnostics";
 import { SystemStatus } from "./SystemStatus";
 import type { LearningExample } from "@/lib/examples";
 
-const ClientCodeEditor = dynamic(() => import("./CodeEditor").then((m) => m.CodeEditor), { ssr: false });
+const ClientCodeEditor = dynamic(() => import("./CodeEditor").then((m) => m.CodeEditor), {
+  ssr: false,
+  loading: () => (
+    <div className="editor-loading" style={{ height: 380 }} role="status">
+      Preparing your editor…
+    </div>
+  ),
+});
+const TraceViewer = dynamic(() => import("./TraceViewer").then((m) => m.TraceViewer), {
+  loading: () => (
+    <p className="panel p-5" role="status">
+      Preparing the replay…
+    </p>
+  ),
+});
 
 const STARTERS: Record<Language, string> = {
   cpp: `#include <bits/stdc++.h>
@@ -122,6 +136,12 @@ export function Playground({ example }: { example?: LearningExample }) {
   const [expectedOutput, setExpectedOutput] = useState(example?.expectedOutput ?? "");
   const { phase, submission, error, submit: runSubmission, reset, stop } = useSubmission();
   const [diagnosticLine, setDiagnosticLine] = useState<number | null>(null);
+  const [view, setView] = useState<WorkspaceView>("edit");
+  const views = useRef<HTMLDivElement>(null);
+  const revealReplay = useCallback(
+    () => views.current?.scrollIntoView({ block: "start", behavior: "instant" }),
+    [],
+  );
   const switchLanguage = (lang: Language) => {
     reset();
     setLanguage(lang);
@@ -129,8 +149,10 @@ export function Playground({ example }: { example?: LearningExample }) {
     setInput(DEFAULT_INPUTS[lang]);
     setExpectedOutput("");
     setDiagnosticLine(null);
+    setView("edit");
   };
   const submit = () => {
+    setView("edit");
     setDiagnosticLine(null);
     void runSubmission({ problemId: "playground", source, input, expectedOutput, language });
   };
@@ -144,6 +166,19 @@ export function Playground({ example }: { example?: LearningExample }) {
     if (!st) return null;
     return { trace: st, output: verdict?.output ?? null };
   }, [result, verdict]);
+  useEffect(() => {
+    if (result) {
+      setView(viewerData ? "replay" : "evidence");
+      const frame = requestAnimationFrame(() =>
+        views.current?.scrollIntoView({ block: "start", behavior: "instant" }),
+      );
+      return () => cancelAnimationFrame(frame);
+    }
+  }, [result, viewerData]);
+  const inspectLine = (line: number) => {
+    setDiagnosticLine(line);
+    setView("edit");
+  };
 
   return (
     <div className="grid gap-5">
@@ -169,7 +204,16 @@ export function Playground({ example }: { example?: LearningExample }) {
         </Link>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
+      <div ref={views} className="workspace-view-anchor">
+        <WorkspaceViews
+          view={view}
+          onChange={setView}
+          replayReady={!!viewerData}
+          resultReady={!!result}
+          running={phase === "running"}
+        />
+      </div>
+      <div className="workspace-panel grid gap-5 lg:grid-cols-[1fr_320px]" hidden={view !== "edit"}>
         {/* left: code */}
         <div className="grid content-start gap-4">
           <div className="panel overflow-hidden">
@@ -235,16 +279,6 @@ export function Playground({ example }: { example?: LearningExample }) {
               <strong>Run could not complete</strong>
               <p>{error}</p>
             </div>
-          )}
-
-          {viewerData && (
-            <TraceViewer
-              studentSource={submission?.source ?? source}
-              language={result?.language ?? language}
-              referenceSource=""
-              studentTrace={viewerData.trace}
-              output={viewerData.output}
-            />
           )}
         </div>
 
@@ -320,13 +354,26 @@ export function Playground({ example }: { example?: LearningExample }) {
               </div>
             )}
           </div>
-
-          {result && (
-            <ExecutionDetails result={result} showOutput={!viewerData} onInspectLine={setDiagnosticLine} />
-          )}
-          {result?.report && <Report report={result.report} />}
         </div>
       </div>
+      {viewerData && (
+        <div className="workspace-panel" hidden={view !== "replay"}>
+          <TraceViewer
+            active={view === "replay"}
+            onReady={revealReplay}
+            studentSource={submission?.source ?? source}
+            language={result?.language ?? language}
+            studentTrace={viewerData.trace}
+            output={viewerData.output}
+          />
+        </div>
+      )}
+      {result && (
+        <div className="workspace-panel evidence-layout" hidden={view !== "evidence"}>
+          <ExecutionDetails result={result} showOutput onInspectLine={inspectLine} />
+          {result.report && <Report report={result.report} />}
+        </div>
+      )}
     </div>
   );
 }

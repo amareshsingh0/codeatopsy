@@ -8,6 +8,8 @@ with a ranked root-cause report.
 
 The visual atlas includes 20 real editable learning programs. Learn mode adds plain-English step explanations; live state views cover arrays, matrices, objects, strings, scalar histories and opt-in tree/linked/graph interpretations. A custom logo and 24 original visual assets form the illustration system.
 
+The visual workspace separates editing, replay and evidence, with synchronized source, before/after changes, optional prediction practice, diagram inspection and phone panel switching. See the [October 2026 visual-learning research](docs/VISUAL-UX-RESEARCH-2026-10.md) and [verification](docs/verification/2026-10-28-visual-workspace.md). Rendering uses bounded local trace data with on-demand panels and language parsers.
+
 Production uses isolated Vercel Sandbox VMs with durable PostgreSQL admission, ownership and launch recovery. See [native cloud execution](docs/VERCEL-NATIVE-EXECUTION.md), [architecture](docs/ARCHITECTURE.md), [production setup](docs/PRODUCTION-SETUP.md), [visual research](docs/VISUAL-RESEARCH.md) and [asset prompts](docs/VISUAL-ASSET-PROMPTS.md).
 
 No more `cout`-guessing. Just evidence.

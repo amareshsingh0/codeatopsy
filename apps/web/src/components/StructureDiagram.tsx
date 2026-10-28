@@ -1,24 +1,42 @@
 "use client";
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { detectStructure } from "@/lib/structures";
 export function StructureDiagram({ raw, previous }: { raw: string; previous?: string }) {
   const model = useMemo(() => detectStructure(raw), [raw]);
   const old = useMemo(() => (previous ? detectStructure(previous) : null), [previous]);
   const [enabled, setEnabled] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [viewportWidth, setViewportWidth] = useState(480);
+  const viewport = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!enabled || !viewport.current) return;
+    const observer = new ResizeObserver((entries) => setViewportWidth(entries[0].contentRect.width));
+    observer.observe(viewport.current);
+    return () => observer.disconnect();
+  }, [enabled]);
   const arrowId = useId().replaceAll(":", "");
   if (!model?.nodes.length) return null;
   const nodes = model.nodes;
   const levels = new Map<number, typeof nodes>();
   for (const node of nodes) levels.set(node.depth, [...(levels.get(node.depth) ?? []), node]);
   const width = Math.max(
-    model.kind === "graph" ? 420 : 240,
+    model.kind === "graph" ? Math.max(420, nodes.length * 25) : 240,
     model.kind === "linked"
       ? nodes.length * 125 + 80
       : Math.max(...[...levels.values()].map((row) => row.length)) * 90 + 30,
   );
   const height =
-    model.kind === "graph" ? 430 : model.kind === "linked" ? 170 : Math.max(170, levels.size * 110 + 50);
+    model.kind === "graph"
+      ? Math.max(430, nodes.length * 25)
+      : model.kind === "linked"
+        ? 170
+        : Math.max(170, levels.size * 110 + 50);
+  const scale = Math.min(1, Math.max(240, viewportWidth) / width, 360 / height) * zoom;
+  const selectedNode = nodes.find((node) => node.id === selected) ?? nodes[0];
+  const neighbors = model.edges.filter(
+    (edge) => edge.from === selectedNode.id || edge.to === selectedNode.id,
+  );
   const positions = new Map(
     nodes.map((node, i) => {
       if (model.kind === "graph") {
@@ -26,8 +44,8 @@ export function StructureDiagram({ raw, previous }: { raw: string; previous?: st
         return [
           node.id,
           {
-            x: width / 2 + Math.cos(angle) * Math.min(width / 2 - 60, 170),
-            y: height / 2 + Math.sin(angle) * 160,
+            x: width / 2 + Math.cos(angle) * (width / 2 - 60),
+            y: height / 2 + Math.sin(angle) * (height / 2 - 60),
           },
         ];
       }
@@ -52,12 +70,38 @@ export function StructureDiagram({ raw, previous }: { raw: string; previous?: st
       <p className="coverage-note">{model.explanation}</p>
       {enabled && (
         <>
-          <div className="diagram-scroll">
+          <div className="diagram-tools">
+            <span className="chip">
+              {nodes.length} nodes · {model.edges.length} connections
+            </span>
+            <div role="group" aria-label="Diagram zoom">
+              <button
+                className="btn"
+                aria-label="Zoom out diagram"
+                disabled={zoom <= 1}
+                onClick={() => setZoom(Math.max(1, zoom / 1.5))}
+              >
+                −
+              </button>
+              <button className="btn" onClick={() => setZoom(1)}>
+                Fit
+              </button>
+              <button
+                className="btn"
+                aria-label="Zoom in diagram"
+                disabled={zoom >= 12}
+                onClick={() => setZoom(Math.min(12, zoom * 1.5))}
+              >
+                +
+              </button>
+            </div>
+          </div>
+          <div className="diagram-scroll" ref={viewport}>
             <svg
-              width={width}
-              height={height}
+              width={width * scale}
+              height={height * scale}
               viewBox={`0 0 ${width} ${height}`}
-              role="img"
+              role="group"
               aria-label={`${model.kind} interpretation of ${nodes.length} captured nodes`}
             >
               <defs>
@@ -106,10 +150,23 @@ export function StructureDiagram({ raw, previous }: { raw: string; previous?: st
                     key={node.id}
                     transform={`translate(${position.x},${position.y})`}
                     className="diagram-node"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Inspect ${node.id}: ${node.label}`}
+                    aria-pressed={selectedNode.id === node.id}
+                    onClick={() => setSelected(node.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setSelected(node.id);
+                      }
+                    }}
                   >
                     <circle
                       r="28"
-                      fill={changed.has(node.id) ? "#f7d6c5" : selected === node.id ? "#b7dec1" : "#eef5e9"}
+                      fill={
+                        changed.has(node.id) ? "#f7d6c5" : selectedNode.id === node.id ? "#b7dec1" : "#eef5e9"
+                      }
                       stroke={node.partial ? "#bd9270" : "#7b9c80"}
                       strokeDasharray={node.partial ? "4 3" : undefined}
                     />
@@ -127,7 +184,7 @@ export function StructureDiagram({ raw, previous }: { raw: string; previous?: st
               Inspect node
               <select
                 aria-label="Inspect structure node"
-                value={selected ?? nodes[0].id}
+                value={selectedNode.id}
                 onChange={(e) => setSelected(e.target.value)}
               >
                 {nodes.map((node) => (
@@ -137,7 +194,11 @@ export function StructureDiagram({ raw, previous }: { raw: string; previous?: st
                 ))}
               </select>
             </label>
-            <p className="mono">{nodes.find((node) => node.id === selected)?.label ?? nodes[0].label}</p>
+            <p className="mono">{selectedNode.label}</p>
+            <p>
+              {neighbors.length} captured {neighbors.length === 1 ? "connection" : "connections"}. Select a
+              node or use the selector to inspect it.
+            </p>
           </div>
           <p className="coverage-note">
             Mint: captured node · coral: value changed since the previous step · dashed: recorder limit.{" "}

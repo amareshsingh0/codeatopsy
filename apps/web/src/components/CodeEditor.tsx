@@ -1,28 +1,18 @@
 "use client";
-import { useEffect, useRef, useMemo } from "react";
+import { useEffect, useRef, useMemo, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
-import { cpp } from "@codemirror/lang-cpp";
-import { python } from "@codemirror/lang-python";
-import { javascript } from "@codemirror/lang-javascript";
-import { java } from "@codemirror/lang-java";
-import { StateEffect, StateField, type Range } from "@codemirror/state";
+import { StateEffect, StateField, type Range, type Extension } from "@codemirror/state";
 import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
 import type { Language } from "@codeautopsy/schemas";
 
-function langExtension(language: Language | undefined) {
-  switch (language) {
-    case "python":
-      return [python()];
-    case "javascript":
-      return [javascript()];
-    case "java":
-      return [java()];
-    case "c":
-    case "cpp":
-    default:
-      return [cpp()];
-  }
-}
+const cppSyntax = () => import("@codemirror/lang-cpp").then((module) => module.cpp());
+const syntaxLoaders: Record<Language, () => Promise<Extension>> = {
+  cpp: cppSyntax,
+  c: cppSyntax,
+  python: () => import("@codemirror/lang-python").then((module) => module.python()),
+  javascript: () => import("@codemirror/lang-javascript").then((module) => module.javascript()),
+  java: () => import("@codemirror/lang-java").then((module) => module.java()),
+};
 
 interface Highlights {
   currentLine: number | null;
@@ -77,10 +67,22 @@ export function CodeEditor({
   readOnly?: boolean;
 }) {
   const viewRef = useRef<EditorView | null>(null);
-  const extensions = useMemo(
-    () => [...langExtension(language), highlightField, EditorView.lineWrapping],
-    [language],
-  );
+  const [syntax, setSyntax] = useState<Extension[]>([]);
+  useEffect(() => {
+    let active = true;
+    setSyntax([]);
+    syntaxLoaders[language ?? "cpp"]()
+      .then((extension) => {
+        if (active) setSyntax([extension]);
+      })
+      .catch(() => {
+        /* Editing remains available without optional syntax highlighting. */
+      });
+    return () => {
+      active = false;
+    };
+  }, [language]);
+  const extensions = useMemo(() => [...syntax, highlightField, EditorView.lineWrapping], [syntax]);
 
   useEffect(() => {
     viewRef.current?.dispatch({

@@ -18,7 +18,7 @@
     "@codeautopsy/instrumenter": "workspace:*",
     "@codeautopsy/schemas": "workspace:*",
     "@codeautopsy/trace-core": "workspace:*",
-    "fastify": "^5.0.0"
+    "fastify": "^5.12.7"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

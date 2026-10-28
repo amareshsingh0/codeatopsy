@@ -17,13 +17,16 @@
   },
   "pnpm": {
     "overrides": {
-      "sharp": "0.34.5"
+      "sharp": "0.35.5",
+      "zod": "4.6.7",
+      "fast-uri@^3": "3.1.9",
+      "fast-uri@^4": "4.2.3"
     }
   },
   "devDependencies": {
     "embedded-postgres": "18.4.0-beta.17",
     "prettier": "^3.9.10",
-    "sharp": "0.34.5",
+    "sharp": "0.35.5",
     "turbo": "^2.5.0",
     "typescript": "^5.6.0"
   }
